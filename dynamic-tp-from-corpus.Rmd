@@ -6,14 +6,30 @@ library(ggplot2)
 library(cowplot)
 knitr::opts_chunk$set(echo = TRUE)
 # FILE PATHS
-CODING_TABLE <- path.expand("~/Google Drive Shared/ichl26-heidelberg-2023/data/combined-coding-table-v17-anim-spc.tsv")
-JHS_TABLE <- path.expand("~/Google Drive Shared/ichl26-heidelberg-2023/data/MED_data_summary_basic.csv")
+
 ```
+
+# How to use this script
+
+This script applies the Sufficiency Principle to a table containing data
+extracted from a corpus, where each row contains a relevant data-point.
+
+The data frame, which is referenced in to in this script as `ct`, must contain
+the following columns:
+
++ **type**: The name of the type represented in the row. For example, if you're
+working with verbs, this would be the verb lemma. Treated as a factor.
++ **time**: Some kind of continuous variable which giving the time associated
+with the data point, e.g. the year.
++ **group**: If the datapoints should be grouped (e.g. some are from the same
+text) name of the group. Should be a factor.
 
 # Setup
 
 ```{r globals}
 # GLOBALS
+CODING_TABLE <- path.expand("~/Google Drive Shared/ichl26-heidelberg-2023/data/combined-coding-table-v17-anim-spc.tsv")
+JHS_TABLE <- path.expand("~/Google Drive Shared/ichl26-heidelberg-2023/data/MED_data_summary_basic.csv")
 WINDOW <- 100000 # number of clauses to allow in the "learning window" for the time limited learner
 NTRIM <- 30 # how many verbs the inexperienced learner knows
 ```
