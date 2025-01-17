@@ -6,6 +6,7 @@ library(ggplot2)
 library(cowplot)
 library(readxl)
 library(tools)
+library(data.table)
 knitr::opts_chunk$set(echo = TRUE)
 # FILE PATHS
 
@@ -13,27 +14,59 @@ knitr::opts_chunk$set(echo = TRUE)
 
 # How to use this script
 
-This script applies the Sufficiency Principle to a table containing data
-extracted from a corpus, where each row contains a relevant data-point.
+## Objective
 
-The data frame, which is referenced in to in this script as `ct`, must contain
-the following columns:
+This script is designed to operate on diachronic data and will perform
+Sufficiency Principle calculations. We model **four different types of learner**
+using an algorithm which is designed to analyse the historical data in a way
+which is more representative of the genuine linguistic experience of an
+historical learner.
 
-+ **type**: The name of the type represented in the row. For example, if you're
+* the **panchronic experienced** learner is the *least* realistic of all our
+learners. This learner has access to all the corpus data and evaluates the rule
+with a single SP calculation.
+* the **panchronic inexperienced** learner has access to data from the full time-span
+of the corpus but only knows the most frequent types in the class (i.e., the
+lexicon is frequency trimmed). The number of types that the learner knows
+can be varied by changing the [Global variable](#global-variables) `NTRIM`.
+A single SP calculation is performed based only on the most frequent
+`NTRIM` types. **Important note**: the inexperienced learner is modelled such that
+s/he will not necessarily learn everything about the argument structure of these
+most common `NTRIM` types. For example, if a type is found 95% of the time in
+non rule-following contexts, the inexperienced learner will most likely not
+encounter the rare data points which show that it is actually rule-following.
+For more information on exactly how this is modelled, see [Implementation](#implementation).
+
+* the **synchronic experienced** learner has access to the full lexicon but 
+uses only the *most recent* data in the corpus. This is modelled by setting the
+number of clauses in the learner's memory with the [global variable](#global-variables)
+`WINDOW`. This learner is modelled using a series of SP calculations for each
+time point in the corpus, each of which only considers data from the previous
+`WINDOW` clauses. As a result, the synchronic learner's vocabulary changes
+over time. Note that the number of clauses specified by `WINDOW` refers to the
+full corpus, not just the number of rule-following items.
+* the **synchronic inexperienced** learner is restricted both by a maximum number
+of clauses (`WINDOW`) and by the maximum size of class (`NTRIM`). This learner
+is intended to be the most realistic of all the learners modelled.
+
+## Preparing the data
+
+The script requires a data frame in which each row is a data point, i.e.,
+if working on verbs, each occurrence of a verb should be on a different row.
+It must contain at least the following columns:
+
+* **type**: The name of the type represented in the row. For example, if you're
 working with verbs, this would be the verb lemma. Treated as a factor.
-+ **time**: Some kind of continuous variable which gives the time associated
+* **time**: Some kind of continuous variable which gives the time associated
 with the data point, e.g. the year.
-+ **group**: If the datapoints should be grouped (e.g. some are from the same
-text) name of the group. Should be a factor.
-+ **in_class**: Is the datapoint a token of the relevant class of items? **1**
+* **in_class**: Is the datapoint a token of the relevant class of items? **1**
   is true, **0** is false.
-+ **follows_rule**: Does the datapoint follow the rule being evaluated? **1**
+* **follows_rule**: Does the datapoint follow the rule being evaluated? **1**
   is true, **0** is false.
   
-If the dataset doesn't contain these columns, they can be generated using
-the functions in the section [Global Functions](#global-functions).
-
-# Setup
+If the dataset doesn't contain these columns, you can create them by
+modifying the four `make_X` functions in the [Global Functions](#global-functions)
+section.
 
 ## Global variables
 
@@ -48,7 +81,7 @@ This block of R code is used to provide global variables to the script.
 # GLOBALS
 CODING_TABLE <- path.expand("~/Google Drive Shared/digs2025-lability-project/combined-coding-table-v17-anim-spc-cos.xlsx")
 WINDOW <- 100000 # number of clauses to allow in the "learning window" for the time limited learner
-NTRIM <- 30 # how many verbs the inexperienced learner knows
+NTRIM <- 23 # how many verbs the inexperienced learner knows
 ```
 
 ## Global functions
@@ -56,7 +89,9 @@ NTRIM <- 30 # how many verbs the inexperienced learner knows
 Here are the function definitions which will be applied to generate the
 **type**, **time** and **group** columns. They take the data frame as their
 sole argument and return a data frame with these columns added. The default
-functions do nothing. 
+functions do nothing.
+
+### Defaults
 
 ```{r global-functions}
 
@@ -73,11 +108,6 @@ make_time <- function(df) {
   return(df)
 }
 
-make_group <- function(df) {
-  df$group <- as.factor(as.character(df$group))
-  return(df)
-}
-
 make_in_class <- function(df) {
   df$in_class <- as.factor(df$in_class)
 }
@@ -88,9 +118,7 @@ make_follows_rule <- function(df) {
 
 ```
 
-In the coding block below, you can **overwrite** the default functions 
-with user-defined functions. This is necessary if the coding table doesn't
-contain **type**, **time** or **group**.
+### User-defined
 
 ```{r user-functions}
 ##########################
@@ -121,16 +149,6 @@ make_time <- function(df) {
   return(df)
 }
 
-make_group <- function(df) {
-  df$group <- as.factor(as.character(
-      sapply(
-        df$textid,
-        usr_get_textid
-      )
-  ))
-  return(df)
-}
-
 make_in_class <- function(df) {
   df$in_class <- as.factor(as.character(
     ifelse(as.character(df$cos) == "1", "1", "0")
@@ -147,46 +165,7 @@ make_follows_rule <- function(df) {
 
 ```
 
-## Preparing the dataset
-
-The code block below:
-
-1. loads the dataset.
-2. adds the type, group and time columns
-3. sorts the table by time and then by group
-
-```{r prepare}
-
-# Read df
-if (file_ext(CODING_TABLE) %in% c("xls", "xlsx")) {
-  ct <- read_excel(
-    path=CODING_TABLE
-  )
-} else {
-  ct <- read.delim(
-    file=CODING_TABLE,
-    quote="",
-    stringsAsFactors=TRUE,
-    header=TRUE,
-    encoding="utf-8")
-}
-
-# Run functions
-
-ct <- make_type(ct)
-ct <- make_time(ct)
-ct <- make_group(ct)
-ct <- make_in_class(ct)
-ct <- make_follows_rule(ct)
-
-# Order df by time and group.
-ct <- ct[
-  order(ct$time, ct$group),
-]
-
-```
-
-# Analysis
+# Script
 
 ## Presentation
 
@@ -236,6 +215,44 @@ frequent types, given by the global variable `NTRIM`.
 
 ## Implementation
 
+### Load dataset
+
+The code block below:
+
+1. loads the dataset.
+2. adds the type, group and time columns
+3. sorts the table by time and then by group
+
+```{r prepare}
+
+# Read df
+if (file_ext(CODING_TABLE) %in% c("xls", "xlsx")) {
+  ct <- read_excel(
+    path=CODING_TABLE
+  )
+} else {
+  ct <- read.delim(
+    file=CODING_TABLE,
+    quote="",
+    stringsAsFactors=TRUE,
+    header=TRUE,
+    encoding="utf-8")
+}
+
+# Run functions
+
+ct <- make_type(ct)
+ct <- make_time(ct)
+ct <- make_in_class(ct)
+ct <- make_follows_rule(ct)
+
+# Order df by time.
+ct <- ct[
+  order(ct$time),
+]
+
+```
+
 ### Calculating cumulative frequency of data for each point in time
 
 How much data is there cumulatively for each point in time?
@@ -246,63 +263,10 @@ colnames(yt) <- c("time", "clause.Freq")
 yt$clause.cumFreq <- cumsum(yt$clause.Freq)
 ```
 
-### Calculating class-size by year (N)
+### Calculating attested structures for each verb by year (*N* and *M*)
 
-We next need to calculate how the value of *N* evolves over time, and we
-do this by creating a table giving (i) the token frequencies of each
-type by time, (ii) the cumulative token frequencies of each type by
-time, and (iii) the cumulative token frequency of each type within the
-window (for the time-limited learner).
-
-We then rank the types for each time period by cumulative frequency and the
-windowed cumulative frequency, so that we can allow frequency trimming.
-
-Lastly, we generate binary variables to show whether this verb figures
-in the vocabulary of our four learners in the year in question.
-
-```{r cross-tabulation n}
-nt <- as.data.frame(xtabs(
-    formula = ~ time + type, # cross tabulate the factors
-    data = ct, # from the ct data frame
-    subset = as.character(ct$in_class) == "1", # subsetting for in_class types only
-    drop.unused.levels = TRUE # and dropping levels
-))
-# From the year table, add the cumulative frequency of clauses up to this year
-nt <- merge(nt, yt[,c("time", "clause.cumFreq")], by="time", sort=FALSE)
-# Resort the df, making it readable.
-nt <- nt[order(nt$type, nt$time),]
-row.names(nt) <- NULL # reset the row indices so it stays in the right order
-# The cross-tabulation sets the year as a factor, then says it's an integer.
-# Let's eliminate this problematic behaviour
-nt$time <- as.numeric(as.character(nt$time))
-#############################################
-# Calculate cumulative frequencies and cumsum.window 
-# Yes it is far too complicated to use an apply function here.
-x <- c() # set two empty return vectors
-y <- c() 
-for (i in 1:nrow(nt)) { # loop over row indices
-  # first, sum the rows from mt with the same lemma and the same transitivity
-  # dating from year or earlier
-  qwe <- nt[nt$type == nt[i,]$type & nt$time <= nt[i,]$time,]
-  # Calculate cumfreq, add it to x
-  x <- c(x, sum(qwe$Freq))
-  # Further subset qwe to exclude clause.cumFreqs that are WINDOW less than the current one.
-  y <- c(y, sum(qwe[qwe$clause.cumFreq > nt[i,]$clause.cumFreq - WINDOW,]$Freq))
- }
-nt$cumFreq <- x # Set cumFreq from x
-nt$cumFreq.window <- y # Set cumFreq.window from y
-############################################
-# Ranking the cumfreq values
-nt$cumFreq.rank <- ave(nt$cumFreq, nt$time, FUN = \(x) rank(x * -1, ties.method = "random"))
-nt$cumFreq.window.rank <- ave(nt$cumFreq.window, nt$time, FUN = \(x) rank(x * -1, ties.method = "random"))
-############################################
-summary(nt)
-```
-
-### Calculating attested structures for each verb by year (*M*)
-
-Next, we need to apply the same procedure but including the **follows_rule**
-information too. This table forms the basis of the analysis. Each row
+We now need to trace the chronological development of the **in_class**
+and **follows_rule** items. This table forms the basis of the analysis. Each row
 codes a type-structure pair.
 
 The columns in the data frame give the following information about
@@ -461,7 +425,7 @@ and for each point in time.
 #mt$tp.learner.is.n <- ave(mt$cumFreq.window.rank.n, as.factor(mt$year), as.factor(mt$is.learner.is), FUN = max)
 # values for m
 #mt$tp.learner.ep.m.amuse <- ave(mt$lemma, as.factor(mt$year), as.factor(mt$is.learner.ep), as.factor(mt$is.m.amuse), FUN = length)
-times <-levels(as.factor(ct$time))
+times <-levels(as.factor(mt$time))
 tpt <- data.frame(matrix(ncol=4, nrow=0))
 # Generate SP stats. This is very slow and inefficient code, but it's not a simple
 # filtering operation.
@@ -499,18 +463,10 @@ tpt$theta.n <- tpt$n / log(tpt$n)
 tpt$n.minus.m <- tpt$n - tpt$m
 tpt$sufficient <- ifelse(tpt$n.minus.m < tpt$theta.n, TRUE, FALSE)
 tpt$sufficient.0 <- tpt$n.minus.m - tpt$theta.n
-summary(tpt)
 
-# qwe <- subset(tpt, learner == "is" & rule == "is.sbjexp")
-# plot(qwe[,c("year","n","m", "sufficient.0")])
-
-```
-
-**UPDATE** Since the initial table is OK to read but lousy to plot, we
-turn it into a plottable table.
-
-```{r tpt.plot}
-library(data.table)
+##############################
+# Create tpt.plot for plotting
+##############################
 # Panchronic learners
 # Bash the data into the right format to graph it (tip: all type values need
 # to be in a single column.)
@@ -533,30 +489,25 @@ tpt.plot <- as.data.frame(unclass(do.call(rbind, l)), stringsAsFactors=TRUE) # r
 summary(tpt.plot)
 ```
 
-# Results
+## Plotting
 
-## Subject experiencers
+### Histogram plot for panchronic learners
 
-### Panchronic learners
-
-First, we'll consider how the two panchronic learners got on learning
-subject experiencers, comparing the results with those of
-Trips/Rainsford (2022).
-
-Here's the R code to generate the plots we're going to need (no output).
+First, we'll consider how the two panchronic learners got on with two
+histogram plots.
 
 ```{r panchronic}
 ##############################################################################
 # Define some functions to draw the plots.
 # N and M plot
-nmplot <- function(learner, rule, df) {
-  # Turn year to a factor
-  df$Year <- as.factor(df$Year)
+nmplot <- function(learner, time, df) {
   # Subset the data
-  df <- droplevels(subset(df, Learner == learner & Rule == rule & Year %in% c("1400", "1500") & Stat %in% c("M", "N minus M")))
+  df <- droplevels(subset(df, Learner == learner & Time == time & Stat %in% c("M", "N minus M")))
+  # Turn time to a factor
+  df$Time <- as.factor(df$Time)
   qwe <- ggplot(
     data = df, # set the dataset
-    mapping = aes(Year, Types, fill = Stat) # Select x and y coordinates; tell it use the fill value to set colour
+    mapping = aes(Time, Types, fill = Stat) # Select x and y coordinates; tell it use the fill value to set colour
   ) + 
   geom_bar( # tell it to make a bar plot
     position="stack", # tell it to stack the columns
@@ -564,67 +515,34 @@ nmplot <- function(learner, rule, df) {
   ) +
   geom_point( # Add a point for the threshold value
     data = df, # using theta_N data
-    mapping = aes(Year, theta.n), # to add a point for the threshold
+    mapping = aes(Time, theta.n), # to add a point for the threshold
     size = 2, # change its size
     show.legend = FALSE # no legend required
   ) +
   geom_text( # Add label
     data = df, # using theta_N data
-    mapping = aes(Year, theta.n), # to add a label for the threshold
+    mapping = aes(Time, theta.n), # to add a label for the threshold
     label = "Theta N", # Label
     nudge_y = 7 # move it up a bit
   ) +
   theme_minimal() + # Use the minimal theme
-  labs(x="Date of latest text", y="Number of types") 
+  labs(x="Time of latest data point", y="Number of types") 
   return(qwe)
 }
 
-ep.sbjexp <- nmplot(learner="ep", rule="is.sbjexp", df=tpt.plot) + ylim(NA, 130)
-ip.sbjexp <- nmplot(learner="ip", rule="is.sbjexp", df=tpt.plot) + ylim(NA, 130)
-ep.sbjexp.tr22 <- nmplot(learner="ep", rule="is.sbjexp.tr22", df=tpt.plot) + ylim(NA, 130)
-ip.sbjexp.tr22 <- nmplot(learner="ip", rule="is.sbjexp.tr22", df=tpt.plot) + ylim(NA, 130)
-```
-
-Below we see how our panchronic learners perform if we "stop the clock"
-in 1400 (as Trips/Rainsford 2022 did) and if we use all the data in the
-corpus, which takes us up to 1500.
-
-```{r panchronic plots corpus m}
+ep <- nmplot(learner="ep", time=max(tpt.plot$Time), df=tpt.plot) + ylim(NA, 90)
+ip <- nmplot(learner="ip", time=max(tpt.plot$Time), df=tpt.plot) + ylim(NA, 90)
 plot_grid(
-  ep.sbjexp, ip.sbjexp,
+  ep, ip,
   ncol = 2, # two columns
   nrow = 1,
-  labels = c("Full lexicon", paste("Top ", as.character(NTRIM), " psych verbs")) # Plot titles
+  labels = c("Full lexicon", paste("Top ", as.character(NTRIM), " types")) # Plot titles
 )
+
+
 ```
 
-Neither of the panchronic learners acquires a productive subject
-experiencer rule. However, the learner who uses the full corpus is
-closer to doing so in 1500 than in 1400. In the 15th century, she learns
-nine more verbs, but comes across fourteen more cases of verbs with a
-subject experiencer. This hints that subject experiencer uses of
-pre-existing verbs are first found in the 15th century.
-
-The previous graph followed our new methodology and calculated *M* from
-the corpus. But what happens if we used the MED to estimate the value of
-*M*, as Trips and Rainsford (2022) did; i.e., what happens if we simply
-use the corpus data to estimate the value of *N*?
-
-```{r panchronic plots med m}
-plot_grid(
-  ep.sbjexp.tr22, ip.sbjexp.tr22,
-  ncol = 2, # two columns
-  nrow = 1,
-  labels = c("Full lexicon", paste("Top ", as.character(NTRIM), " psych verbs")) # Plot titles
-)
-```
-
-As we can see, this time we're able to replicate the result from
-Trips/Rainsford (2022) with the new corpus. We need to look further into
-this, but it seems like some of the subject experiencers uses of psych
-verbs in the MED aren't being found in the corpus.
-
-## Synchronic learners
+### Line plot for synchronic learners
 
 Next, we're going to take a look at the two "synchronic" (ish) learners.
 Here's the R code for generating the plots.
@@ -632,17 +550,17 @@ Here's the R code for generating the plots.
 ```{r diachronic learners}
 
 # First, calculate the point from which it's sensible to start plotting, i.e.
-# the year from which we have more than WINDOW clauses
-start.year <- min(mt[mt$clause.cumFreq > WINDOW,]$year)
+# the time from which we have more than WINDOW clauses
+start.time <- min(mt[mt$clause.cumFreq > WINDOW,]$time)
 # Trim the data table
-tpt.trimmed <- subset(tpt.plot, Year >= start.year)
+tpt.trimmed <- subset(tpt.plot, Time >= start.time)
 
-nmplot.time <- function(learner, rule, df) {
+nmplot.time <- function(learner, df) {
   # Subset the data
-  df <- droplevels(subset(df, Learner == learner & Rule == rule))
+  df <- droplevels(subset(df, Learner == learner))
   qwe <- ggplot(
     data = df, # set the dataset
-    mapping = aes(Year, Types)
+    mapping = aes(Time, Types)
   ) +
   geom_line( # tell it to make a line graph
     mapping = aes(color = Stat), # grouping and colouring by Stat
@@ -650,97 +568,17 @@ nmplot.time <- function(learner, rule, df) {
   ) + 
   ylim(0, NA) + # Making sure the scale start from zero
   theme_minimal() + # Use the minimal theme
-  labs(x="Date of latest text", y="Number of types")
+  labs(x="Time of latest data point", y="Number of types")
   return(qwe)
 }
 
-es.sbjexp <- nmplot.time(learner="es", rule="is.sbjexp", tpt.trimmed)
-is.sbjexp <- nmplot.time(learner="is", rule="is.sbjexp", tpt.trimmed)
-es.sbjexp.tr22 <- nmplot.time(learner="es", rule="is.sbjexp.tr22", tpt.trimmed)
-is.sbjexp.tr22 <- nmplot.time(learner="is", rule="is.sbjexp.tr22", tpt.trimmed)
+es <- nmplot.time(learner="es", tpt.trimmed)
+is <- nmplot.time(learner="is", tpt.trimmed)
 
-```
-
-In each year, the diachronic learner is only drawing data from the last
-100,000 clauses. (The plot starts in 1315, which is the earliest data
-before which there are 100,000 clauses in the corpus). As time goes by,
-the learner add new data and forgets old data. So we can see how
-learners of different generations may have come to different conclusions
-based on the input.
-
-```{r synchronic corpus m}
 plot_grid(
-  es.sbjexp, is.sbjexp,
+  es, is,
   ncol = 2, # two columns
   nrow = 1,
-  labels = c("Full lexicon", paste("Top ", as.character(NTRIM), " psych verbs")) # Plot titles
+  labels = c("Full lexicon", paste("Top ", as.character(NTRIM), " types")) # Plot titles
 )
-```
-
-The headline result is that the synchronic learners come to the same
-conclusion as the panchronic learners: there's no productive subject
-experiencer rule, since the line showing *N minus M* never drops below
-the line for *Theta N*. However, there's something going on towards the
-end of the period. The learner using the full lexicon starts to know
-fewer psych verbs (*N* reduces), suggesting that some of the Old English
-vocabulary is now being lost. At the same time, she knows *more* psych
-verbs with subject experiencers (*M* increases), suggesting that subject
-experiencers are become more frequent in the input. As a result, she
-suddenly comes back really close to the threshold for acquiring a
-productive rule. The learner using a frequency trimmed corpus obviously
-knows only 30 verbs throughout the time period. However, the value of
-*M* jumps up at the end of the period, suggesting either that she is
-learning more subject-experiencer verbs, or that the verbs she already
-know are being used more frequently with subject experiencers. Once
-again, she never quite crosses the TP threshold.
-
-If we apply Trips/Rainsford's (2022) methodology for calculating *M*,
-how does the picture change?
-
-```{r synchronic med m}
-plot_grid(
-  es.sbjexp.tr22, is.sbjexp.tr22,
-  ncol = 2, # two columns
-  nrow = 1,
-  labels = c("Full lexicon", paste("Top ", as.character(NTRIM), " psych verbs")) # Plot titles
-)
-```
-
-A very different picture emerges when the MED data is used to estimate
-M. For the full lexicon, the difference between *N* and *M* stays pretty
-constantly just below the threshold. For the frequency-trimmed lexicon,
-the number of exceptions is definitely below the threshold. This
-replicates Trips and Rainsford's (2022) result.
-
-What does this mean? In short, it means that a lot of verbs that the MED
-records as taking subject-experiencers are not actually attested with
-this argument structure in the corpus. Moreover, the discrepancy between
-the two values of *M* is much bigger in the earliest years of the corpus
-data, which suggests (i) that new verbs are initially attested only with
-a transitive, *amuse*-type argument structure and/or (ii) older verbs
-which are reported as taking subject-experiencers are never attested as
-doing so.
-
-# Attested argument structure of psych verbs
-
-(This section old, no longer operational.)
-
-Using the coding table, calculate frequency of intransitive and
-transitive use for each verb, adding this to the table of psych verbs
-created for the paper. Distinguish different types of objects for each
-verb.
-
-```{r arg structure}
-# cross tabulate lemmas and dobj values. Use as.data.frame.matrix
-#qwe <- as.data.frame.matrix(table(df$lemma, df$dobj))
-# prefix for colnames
-#colnames(qwe) <- paste("dobj.", colnames(qwe), sep="")
-# add a sum of non-transitive columns (2 to 5)
-#qwe$dobj.trans <- apply(qwe[,2:5], 1, sum)
-# calculate percent transitive
-#qwe$dobj.trans.ratio <- qwe$dobj.trans / (qwe$dobj.trans + qwe$dobj.0)
-# merge datasets
-#psych_verbs_as <- merge(df.pv, qwe, by.x = "lemma", by.y = "row.names")
-# save
-#write.csv(psych_verbs_as, OUT_AS)
 ```
