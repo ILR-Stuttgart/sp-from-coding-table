@@ -530,8 +530,8 @@ nmplot <- function(learner, time, df) {
   return(qwe)
 }
 
-ep <- nmplot(learner="ep", time=max(tpt.plot$Time), df=tpt.plot) + ylim(NA, 90)
-ip <- nmplot(learner="ip", time=max(tpt.plot$Time), df=tpt.plot) + ylim(NA, 90)
+ep <- nmplot(learner="ep", time=max(tpt.plot$Time), df=tpt.plot) + ylim(NA, max(tpt$n))
+ip <- nmplot(learner="ip", time=max(tpt.plot$Time), df=tpt.plot) + ylim(NA, max(tpt$n))
 plot_grid(
   ep, ip,
   ncol = 2, # two columns
@@ -572,8 +572,8 @@ nmplot.time <- function(learner, df) {
   return(qwe)
 }
 
-es <- nmplot.time(learner="es", tpt.trimmed)
-is <- nmplot.time(learner="is", tpt.trimmed)
+es <- nmplot.time(learner="es", tpt.trimmed) + ylim(0, max(tpt$n))
+is <- nmplot.time(learner="is", tpt.trimmed) + ylim(0, max(tpt$n))
 
 plot_grid(
   es, is,
