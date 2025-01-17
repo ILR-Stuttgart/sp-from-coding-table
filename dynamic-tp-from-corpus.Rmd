@@ -4,6 +4,8 @@
 ```{r setup, include=FALSE}
 library(ggplot2)
 library(cowplot)
+library(readxl)
+library(tools)
 knitr::opts_chunk$set(echo = TRUE)
 # FILE PATHS
 
@@ -19,136 +21,228 @@ the following columns:
 
 + **type**: The name of the type represented in the row. For example, if you're
 working with verbs, this would be the verb lemma. Treated as a factor.
-+ **time**: Some kind of continuous variable which giving the time associated
++ **time**: Some kind of continuous variable which gives the time associated
 with the data point, e.g. the year.
 + **group**: If the datapoints should be grouped (e.g. some are from the same
 text) name of the group. Should be a factor.
++ **in_class**: Is the datapoint a token of the relevant class of items? **1**
+  is true, **0** is false.
++ **follows_rule**: Does the datapoint follow the rule being evaluated? **1**
+  is true, **0** is false.
+  
+If the dataset doesn't contain these columns, they can be generated using
+the functions in the section [Global Functions](#global-functions).
 
 # Setup
 
+## Global variables
+
+This block of R code is used to provide global variables to the script. 
+**You should update these options.**
+
++ `CODING_TABLE`: Path to the file containing the data frame.
++ `WINDOW`: The maximum number of occurrences analysed by "synchronic" learners.
++ `NTRIM`: The number of verb lemmas known by "inexperienced" learners.
+
 ```{r globals}
 # GLOBALS
-CODING_TABLE <- path.expand("~/Google Drive Shared/ichl26-heidelberg-2023/data/combined-coding-table-v17-anim-spc.tsv")
-JHS_TABLE <- path.expand("~/Google Drive Shared/ichl26-heidelberg-2023/data/MED_data_summary_basic.csv")
+CODING_TABLE <- path.expand("~/Google Drive Shared/digs2025-lability-project/combined-coding-table-v17-anim-spc-cos.xlsx")
 WINDOW <- 100000 # number of clauses to allow in the "learning window" for the time limited learner
 NTRIM <- 30 # how many verbs the inexperienced learner knows
 ```
 
-## Loading
+## Global functions
 
-The setup block builds the datasets that we're going to analyse in the
-script. First, we load the data table from the Google Drive. Nemt, we
-load a simplified version of the `MED_data_summary_june22_SUBMITTED`
-file, which contains the data that was used for the published version of
-the JHS paper. The list excludes lemmas that weren't discussed in the
-paper.
+Here are the function definitions which will be applied to generate the
+**type**, **time** and **group** columns. They take the data frame as their
+sole argument and return a data frame with these columns added. The default
+functions do nothing. 
+
+```{r global-functions}
+
+########################
+# DEFAULT FUNCTIONS    #
+########################
+
+make_type <- function(df) {
+  df$type <- as.factor(as.character(df$type))
+  return(df)
+}
+
+make_time <- function(df) {
+  return(df)
+}
+
+make_group <- function(df) {
+  df$group <- as.factor(as.character(df$group))
+  return(df)
+}
+
+make_in_class <- function(df) {
+  df$in_class <- as.factor(df$in_class)
+}
+
+make_follows_rule <- function(df) {
+  df$follows_rule <- as.factor(df$follows_rule)
+}
+
+```
+
+In the coding block below, you can **overwrite** the default functions 
+with user-defined functions. This is necessary if the coding table doesn't
+contain **type**, **time** or **group**.
+
+```{r user-functions}
+##########################
+# FUNCTIONS FOR DIGS PAPER
+##########################
+
+usr_get_textid <- function(chars) {
+  # If commas, split by comma
+  if (grepl(",", chars)) {
+    return(strsplit(
+      chars, ",")[[1]][1]
+    )
+  } else {
+    # else split by full stop
+    return(strsplit(
+      chars, ".")[[1]][1]
+    )
+  }
+}
+
+make_type <- function(df) {
+  df$type <- as.factor(as.character(df$lemma))
+  return(df)
+}
+
+make_time <- function(df) {
+  df$time <- df$year
+  return(df)
+}
+
+make_group <- function(df) {
+  df$group <- as.factor(as.character(
+      sapply(
+        df$textid,
+        usr_get_textid
+      )
+  ))
+  return(df)
+}
+
+make_in_class <- function(df) {
+  df$in_class <- as.factor(as.character(
+    ifelse(as.character(df$cos) == "1", "1", "0")
+  ))
+  return(df)
+}
+
+make_follows_rule <- function(df) {
+  df$follows_rule <- as.factor(as.character(
+    ifelse(as.character(df$dobj) == "0", "0", "1")
+  ))
+  return(df)
+}
+
+```
+
+## Preparing the dataset
+
+The code block below:
+
+1. loads the dataset.
+2. adds the type, group and time columns
+3. sorts the table by time and then by group
 
 ```{r prepare}
 
-
 # Read df
-summary(ct <- read.delim(
-   file=CODING_TABLE,
-   quote="",
-   stringsAsFactors=TRUE,
-   header=TRUE,
-   encoding="utf-8"))
-# Load lemma table
-summary(pv <- read.csv(
-  file=JHS_TABLE,
-  stringsAsFactors=TRUE,
-  header=TRUE,
-  encoding="utf-8"))
-# Update "year" so that
-# Set psych lemmas
-summary(psych_lemmas <- pv$lemma)
-# make amuse/admire binary
-#df.pv$is.amuse <- as.factor(ifelse(df.pv$amuse.attested == "",FALSE,TRUE))
-#df.pv$is.admire <- as.factor(ifelse(df.pv$admire.attested == "",FALSE,TRUE))
-# Adding psych vector
-#df$psych <- as.factor(ifelse(df$lemma %in% psych_lemmas, "psych", 0))
+if (file_ext(CODING_TABLE) %in% c("xls", "xlsx")) {
+  ct <- read_excel(
+    path=CODING_TABLE
+  )
+} else {
+  ct <- read.delim(
+    file=CODING_TABLE,
+    quote="",
+    stringsAsFactors=TRUE,
+    header=TRUE,
+    encoding="utf-8")
+}
+
+# Run functions
+
+ct <- make_type(ct)
+ct <- make_time(ct)
+ct <- make_group(ct)
+ct <- make_in_class(ct)
+ct <- make_follows_rule(ct)
+
+# Order df by time and group.
+ct <- ct[
+  order(ct$time, ct$group),
+]
+
 ```
 
-# Method of analysis
+# Analysis
 
 ## Presentation
 
-Let's conceptualize the texts in the coding table, chronologically
-ordered, as inputs to a learning algorithm. Let's also suppose that the
-learning algorithm is trying to understand the argument structure of
-psych verbs, in particular the three rules that Trips & Rainsford (2022)
-identified in Middle English: + *amuse*-type argument structure, i.e.
-can be used transitively with an object-EXPERIENCER; + *admire*-type
-argument structure, i.e. can be used transitively with a
-subject-EXPERIENCER; + *SbjExp*, i.e. can be used, transitively or
-intransitively, with a subject-EXPERIENCER.
+The data in the coding table is processed in chronological order 
+using the **time** and **group** columns as the input to a learning algorithm.
+The algorithm is trying to evaluate the evidence that a particular rule is
+productive, considering the tokens of every **type** within a class (the
+**in_class** column) to see whether or not they provide evidence for a
+productive rule (the **follows_rule** column).
 
 To model the experience of a language learner, let's imagine that the
-learning algorithm "reads through" the temts in the corpus one by one.
-In every occurrence of every psych verb in the corpus, the learning
+learning algorithm "reads through" the texts in the corpus one by one.
+For every occurrence of a item within the class in question,the learning
 algorithm receives two pieces of data. First, it receives information
-that the verb exists. Second, it receives information about its possible
-argument structure. Consequently, in this analysis *a type is not just a
-verb but a verb associated with information about its argument
-structure*, i.e., not just *plesen* but *plesen + amuse-type AS* or
-*plesen with subject experiencer*. As it "reads through" the corpus, it
+that the type exists. Second, it receives information as to whether it follows
+a particular rule or not. As it "reads through" the corpus, it
 acquires more and more data until it arrives at an analysis based on all
 the corpus data.
 
 However, there are a number of ways in which this *doesn't* model the
-experience of a language learner. First, the corpus contains nearly 4000
-separate verb lemmas, some of which are very rare and possibly
+experience of a language learner. First, corpus data may contain a large 
+number of different types, some of which are very rare and possibly
 restricted to written registers. While a proficient speaker may
 eventually acquire this many verbs, it's unclear whether many learners
-of Middle English will have been exposed to so many verbs during the
+will have been exposed to so many types during the
 critical period. This is where "frequency trimming" comes in (Kodner
 2019): we assume that a better approximation of the input to a real
 language learner comes from ignore the rarer types, so we may want to
 restrict our learning algorithm to focusing on only the most frequent
-types. Second, the data in the coding table date from 1150 to 1500. It's
+types. Second, historical data is spread out across a long time period, and it's
 unlikely that any learner would have had access to such a wide range of
-data (from 1150 to 1500). Consequently, as the learning algorithm
-progresses chronologically through the corpus, data from further back in
-time should drop out of the input.
+data chronologically. Consequently, as the learning algorithm
+progresses through the corpus, data from further back in time should drop out of
+the input.
 
 The analysis thus models different types of learner based on two
-independent parameters of variation: + on the **diachronic** axis, we
-model a single **panchronic** learner, who has access to data from every
-text, and a series of **synchronic** learners, who only have access to
-data from the previous 100,000 clauses in the corpus. + on the
-**knowledge** axis, we model an **experienced** learner, who bases their
+independent parameters of variation:
+
+* on the **diachronic** axis, we model a single **panchronic** learner, who has
+access to data from every text, and a series of **synchronic** learners, who
+only have access to data from a fixed number of clauses, given in the global
+variable `WINDOW`.
+* on the **knowledge** axis, we model an **experienced** learner, who bases their
 analysis on every single type attested in the time period in question,
-and an **inexperienced** learner, whose analysis is based only on the 30
-most frequent types.
+and an **inexperienced** learner, whose analysis is based only on the most
+frequent types, given by the global variable `NTRIM`.
 
 ## Implementation
 
-### Adding to the coding table
+### Calculating cumulative frequency of data for each point in time
 
-The first step is to add information to each occurrence of the coding
-table indicating whether the structure is transitive or intransitive. To
-do this, we add the column `transitivity` with the following values:
-
-* `transitive` when `dobj` or `iobj` is not equal to `0`, i.e. the corpus
-contains a `NP-OBJ` and a `NP-OB2` governed by the verb. 
-* `intransitive` when `dobj`, `iobj`, `pobj` and `pass` are all `0`, i.e.
-there is only one possible nominal argument here. 
-* `unk` in all other cases.
-
-```{r update coding}
-
-ct$transitivity <- as.factor(with(ct, 
-                            ifelse(dobj == "0" & iobj == "0" & pass == "0" & pobj == "0", "intransitive",
-                            ifelse(dobj != "0" | iobj != "0", "transitive", "unk"))))
-```
-
-### Calculating cumulative frequency of data for each year
-
-How much data is there cumulatively for each year in the corpus?
+How much data is there cumulatively for each point in time?
 
 ```{r year cumul}
-yt <- as.data.frame(table(ct$year)) # Create table of frequencies by year
-colnames(yt) <- c("year", "clause.Freq")
+yt <- as.data.frame(table(ct$time)) # Create table of frequencies by year
+colnames(yt) <- c("time", "clause.Freq")
 yt$clause.cumFreq <- cumsum(yt$clause.Freq)
 ```
 
@@ -156,11 +250,11 @@ yt$clause.cumFreq <- cumsum(yt$clause.Freq)
 
 We next need to calculate how the value of *N* evolves over time, and we
 do this by creating a table giving (i) the token frequencies of each
-lemma by year, (ii) the cumulative token frequencies of each lemma by
-year, and (iii) the cumulative token frequency of each lemma within the
+type by time, (ii) the cumulative token frequencies of each type by
+time, and (iii) the cumulative token frequency of each type within the
 window (for the time-limited learner).
 
-We then rank the verbs for each year by cumulative frequency and the
+We then rank the types for each time period by cumulative frequency and the
 windowed cumulative frequency, so that we can allow frequency trimming.
 
 Lastly, we generate binary variables to show whether this verb figures
@@ -168,19 +262,19 @@ in the vocabulary of our four learners in the year in question.
 
 ```{r cross-tabulation n}
 nt <- as.data.frame(xtabs(
-    formula = ~ year + lemma, # cross tabulate the factors
+    formula = ~ time + type, # cross tabulate the factors
     data = ct, # from the ct data frame
-    subset = ct$lemma %in% psych_lemmas, # subsetting for psych lemmas only
+    subset = as.character(ct$in_class) == "1", # subsetting for in_class types only
     drop.unused.levels = TRUE # and dropping levels
 ))
 # From the year table, add the cumulative frequency of clauses up to this year
-nt <- merge(nt, yt[,c("year", "clause.cumFreq")], by="year", sort=FALSE)
+nt <- merge(nt, yt[,c("time", "clause.cumFreq")], by="time", sort=FALSE)
 # Resort the df, making it readable.
-nt <- nt[order(nt$lemma, nt$year),]
+nt <- nt[order(nt$type, nt$time),]
 row.names(nt) <- NULL # reset the row indices so it stays in the right order
 # The cross-tabulation sets the year as a factor, then says it's an integer.
 # Let's eliminate this problematic behaviour
-nt$year <- as.numeric(as.character(nt$year))
+nt$time <- as.numeric(as.character(nt$time))
 #############################################
 # Calculate cumulative frequencies and cumsum.window 
 # Yes it is far too complicated to use an apply function here.
@@ -189,7 +283,7 @@ y <- c()
 for (i in 1:nrow(nt)) { # loop over row indices
   # first, sum the rows from mt with the same lemma and the same transitivity
   # dating from year or earlier
-  qwe <- nt[nt$lemma == nt[i,]$lemma & nt$year <= nt[i,]$year,]
+  qwe <- nt[nt$type == nt[i,]$type & nt$time <= nt[i,]$time,]
   # Calculate cumfreq, add it to x
   x <- c(x, sum(qwe$Freq))
   # Further subset qwe to exclude clause.cumFreqs that are WINDOW less than the current one.
@@ -199,69 +293,71 @@ nt$cumFreq <- x # Set cumFreq from x
 nt$cumFreq.window <- y # Set cumFreq.window from y
 ############################################
 # Ranking the cumfreq values
-nt$cumFreq.rank <- ave(nt$cumFreq, nt$year, FUN = \(x) rank(x * -1, ties.method = "random"))
-nt$cumFreq.window.rank <- ave(nt$cumFreq.window, nt$year, FUN = \(x) rank(x * -1, ties.method = "random"))
+nt$cumFreq.rank <- ave(nt$cumFreq, nt$time, FUN = \(x) rank(x * -1, ties.method = "random"))
+nt$cumFreq.window.rank <- ave(nt$cumFreq.window, nt$time, FUN = \(x) rank(x * -1, ties.method = "random"))
 ############################################
 summary(nt)
-
 ```
 
 ### Calculating attested structures for each verb by year (*M*)
 
-Next, we need to apply the same procedure but including the transitivity
-of the verb. This table will form the basis of the analysis. Each row
-codes a lemma-structure pair, e.g. transitive *plesen* associated with a
-year. For example, the data in the row
-`year=1475, lemma=plesen, transitivity=transitive` provides all the
-relevant data about what each of our four learners would have known
-about transitive *plesen* in 1475.
+Next, we need to apply the same procedure but including the **follows_rule**
+information too. This table forms the basis of the analysis. Each row
+codes a type-structure pair.
 
 The columns in the data frame give the following information about
 **token** frequency: 
 
-* `Freq`: frequency of the lemma-structure pair *in
+* `Freq`: frequency of the type-structure pair *in
 this year only* 
-* `cumFreq`: cumulative frequency of the lemma-structure
+* `cumFreq`: cumulative frequency of the type-structure
 pair *up to and including this year* 
 * `cumFreq.rank`: ranking of the
-relative frequency of the lemma-structure pair up to and including this
+relative frequency of the type-structure pair up to and including this
 year, where 1 is the most frequent. 
 * `clause.cumFreq`: how many clauses
 occur in the corpus up to and including this year 
 * `cumFreq.window`:
-cumulative frequency of the lemma-structure pair up to and including
-this year, but only considering the previous 100000 clauses in the
+cumulative frequency of the type-structure pair up to and including
+this time point, but only considering the previous `WINDOW` clauses in the
 corpus. 
 * `cumFreq.window.rank`: ranking of the relative frequency of
-lemma-structure pairs up to and including this year, but only
-considering the previous 100000 clauses in the corpus where 1 is the
+type-structure pairs up to and including this point in time, but only
+considering the previous `WINDOW` clauses in the corpus where 1 is the
 most frequent. 
 * `window.start.year`: since the window is based on the
-previous 100000 clauses, this records the date of the *earliest* text in
+previous `WINDOW` clauses, this records the earliest time point of the in
 the window.
 
 A non-trivial problem is that for trimming the lexicon, we need to know
-how many *verbs* the learner knows rather than how many lemma-structure
+how many *types* the learner knows rather than how many type-structure
 pairs. To illustrate this problem and how we solve it, let's imagine
 that a very inexperienced learner has only learned the following five
-most frequent "types": 1. *loven*, *admire*-type 1. *dreden*,
-*admire*-type 1. *plesen*, *amuse*-type 1. *haten*, *admire*-type 1.
-*dreden*, intransitive Although the table rankings show that this
-learner has learned five structures, all of which are (potentially)
-relevant when trying to calculate the value of *M* for the TP, the
-learner in fact only knows four lemmas. So the table needs to indicate,
-for each row, how many verbs the learner has acquired by the time they
-learn the structure coded in the row. This is done by the following
+most frequent "types":
+
+1. *loven* + not rule following;
+2. *dreden* + not rule following;
+3. *admire* + not rule following;
+4. *plesen* + not rule following;
+5. *haten* + not rule following;
+6. *dreden* + rule following.
+
+Although the table rankings show that this
+learner has learned six structures, all of which are (potentially)
+relevant when trying to calculate the value of *M* for the SP, the
+learner in fact only knows five types. So the table needs to indicate,
+for each row, how many type. the learner has acquired by the time they
+learn the type-structure pair coded in the row. This is done by the following
 columns: 
 
-* `cumFreq.rank.n`: number of lemmas that the learner has
+* `cumFreq.rank.n`: number of types that the learner has
 already encountered by the time they learn this particular
-lemma-structure pair. In the example above, the value for both *haten*,
-*admire*-type and *dreden*, intransitive would be 4, since learning the
-*dreden* intransitive lemma-structure pair doesn't involve learning a
-new lemma. 
+type-structure pair. In the example above, the value for both *haten* +
+not rule following and *dreden* + rule following would be 4, since learning the
+*dreden* rule-following type-structure pair doesn't involve learning a
+new type. 
 * `cumFreq.window.rank.n`: as above, but only considering
-data from the last 100000 clauses in the corpus.
+data from the last `WINDOW` clauses in the corpus.
 
 Using these values, we can now create four boolean variables to indicate
 which of our four learners would have been exposed to the
@@ -270,82 +366,58 @@ lemma-structure pair in the table at that particular date:
 * `is.learner.ep`: the experienced, panchronic learner, i.e. the learner
 whose input is everything attested in the corpus 
 * `is.learner.es`: the
-experienced, synchronie learner, i.e. the learner whose input is
-everything attested in the previous 100,000 clauses 
+experienced, synchronic learner, i.e. the learner whose input is
+everything attested in the previous `WINDOW` clauses 
 * `is.learner.ip`:
 the inexperienced, panchronic leaner, i.e. the learner whose input is
-the most frequent lemma-structure pairs in the corpus up to this point
-up until a maxmimum of 30 verbs have been learned. 
+the most frequent type-structure pairs in the corpus up to this point
+up until a maxmimum of `NTRIM` verbs have been learned. 
 * `is.learner.is`:
 the inexperienced, synchronic learner, as above, but calculated from the
-last 100,000 clauses rather than the full corpus.
+last `WINDOW` clauses rather than the full corpus.
 
-We now create some columns of boolean variables to indicate which TP
-analysis the lemma-structure pair is relevant for. First, we need to
-know whether the verb is supposed to be amuse or admire type. We create
-`is.amuse`, `is.admire` and `is.sbjexp` columns in the psych verb table
-and merge these columns into the cross-tabulated data frame. Then, we
-create three further variables, depending on whether this type provides
-evidence for a productive admire, amuse or subject experiencer rule. The
-logic applied to this is as follows: 
-
-* `is.m.amuse` is `TRUE` if this is
-an amuse-type verb and it's being used transitively;
-* `is.m.admire` is
-`TRUE` if this is an admire-type verb and it's being used
-transitively; 
-* `is.m.sbjexp` is `TRUE` if this is an admire-type verb
-OR if it's being used intransitively.
-
-This logic is as far as we can go with the coding table, and it does have drawbacks. 
-* If a verb is
-recorded in the MED as showing both amuse- and admire-type AS, each
-transitive token we encounter will be counted as evidence for both the
-amuse and the admire-type rule. However, the token itself may well not
-be ambiguous at all. 
-* If a verb is used intransitively, we're assuming
-that it has a subject experiencer, but it could be that the subject is
-still the stimulus and the experiencer is unexpressed.
+**Important technical note: this code block can be very slow if there is
+a lot of data. We're talking hours.**
 
 ```{r cross-tabulation m}
 mt <- as.data.frame(xtabs(
-    formula = ~ year + lemma + transitivity, # cross tabulate the factors
+    formula = ~ time + type + follows_rule, # cross tabulate the factors
     data = ct, # from the ct data frame
-    subset = ct$lemma %in% psych_lemmas, # subsetting for psych lemmas only
+    subset = ct$in_class == "1", # subsetting for in_class types only
     drop.unused.levels = TRUE # and dropping levels
 ))
 # From the year table, add the cumulative frequency of clauses up to this year
-mt <- merge(mt, yt[,c("year", "clause.cumFreq")], by="year", sort=FALSE)
+mt <- merge(mt, yt[,c("time", "clause.cumFreq")], by="time", sort=FALSE)
 # Resort the df, making it readable.
-mt <- mt[order(mt$transitivity, mt$lemma, mt$year),]
+mt <- mt[order(mt$follows_rule, mt$type, mt$time),]
 row.names(mt) <- NULL # reset the row indices so it stays in the right order
 # The cross-tabulation sets the year as a factor, then says it's an integer.
 # Let's eliminate this problematic behaviour
-mt$year <- as.numeric(as.character(mt$year))
+mt$time <- as.numeric(as.character(mt$time))
 # Calculate cumulative frequencies and cumsum.window 
 # Yes it is far too complicated to use an apply function here.
 x <- c() # set three empty return vectors
 y <- c() 
 z <- c()
 for (i in 1:nrow(mt)) { # loop over row indices
-  # first, sum the rows from mt with the same lemma and the same transitivity
-  # dating from year or earlier
-  qwe <- mt[mt$lemma == mt[i,]$lemma & mt$transitivity == mt[i,]$transitivity & mt$year <= mt[i,]$year,]
+  # first, sum the rows from mt with the same type and the same follows_rule
+  # dating from time or earlier
+  qwe <- mt[mt$type == mt[i,]$type & mt$follows_rule == mt[i,]$follows_rule & mt$time <= mt[i,]$time,]
   # Calculate cumfreq, add it to x
   x <- c(x, sum(qwe$Freq))
   # Further subset qwe to exclude clause.cumFreqs that are WINDOW less than the current one.
   asd <- qwe[qwe$clause.cumFreq > mt[i,]$clause.cumFreq - WINDOW,]
   y <- c(y, sum(asd$Freq))
   # Let's also record the year the window starts (for future reference)
-  z <- c(z, min(asd$year))
+  z <- c(z, min(asd$time))
  }
 mt$cumFreq <- x # Set cumFreq from x
 mt$cumFreq.window <- y # Set cumFreq.window from y
 mt$window.start.year <- z # Set startyear from z
 ############################################
 # Ranking the cumfreq values
-mt$cumFreq.rank <- ave(mt$cumFreq, mt$year, FUN = \(x) rank(x * -1, ties.method = "random"))
-mt$cumFreq.window.rank <- ave(mt$cumFreq.window, mt$year, FUN = \(x) rank(x * -1, ties.method = "random"))
+mt$cumFreq.rank <- ave(mt$cumFreq, mt$time, FUN = \(x) rank(x * -1, ties.method = "random"))
+mt$cumFreq.window.rank <- ave(mt$cumFreq.window, mt$time, FUN = \(x) rank(x * -1, ties.method = "random"))
 ########################################################
 # Calculating N for the window.rank scores for each year
 # For each row, we subset the lemma vector by year and cumFreq.window.rank.
@@ -354,28 +426,15 @@ mt$cumFreq.window.rank.n <- 0
 mt$cumFreq.rank.n <- 0
 for (i in 1:nrow(mt)) { # iterate over the data frame
   # subset lemmas by year and having a lower or equal cumFreq.(window).rank
-  x <- mt[mt$year == mt[i,]$year & mt$cumFreq.window.rank <= mt[i,]$cumFreq.window.rank,]$lemma
-  y <- mt[mt$year == mt[i,]$year & mt$cumFreq.rank <= mt[i,]$cumFreq.rank,]$lemma
+  x <- mt[mt$time == mt[i,]$time & mt$cumFreq.window.rank <= mt[i,]$cumFreq.window.rank,]$type
+  y <- mt[mt$time == mt[i,]$time & mt$cumFreq.rank <= mt[i,]$cumFreq.rank,]$type
   # calculate number of lemmas known (levels of the new vector)
   mt[i,]$cumFreq.window.rank.n <- length(levels(droplevels(x)))
   mt[i,]$cumFreq.rank.n <- length(levels(droplevels(y)))
 }
-#######################################################
-# Create is.amuse and is.admire in pv data frame
-pv$is.amuse <- ifelse(pv$amuse.attested == "", FALSE, TRUE)
-pv$is.admire <- ifelse(pv$admire.attested == "", FALSE, TRUE)
-pv$is.sbjexp <- ifelse(pv$sbj.attested == "", FALSE, TRUE)
-# Merge the two data frames
-mt <- merge(mt, pv[,c("lemma", "is.amuse", "is.admire", "is.sbjexp")], # merge subset of pv into mt
-           by = "lemma", # using the lemma property for both dfs
-           sort = FALSE # don't sort
-           )
-# Create is.m.amuse, is.m.admire and is.sbjexp variables
-mt$is.m.amuse <- ifelse(mt$transitivity == "transitive" & mt$is.amuse, TRUE, FALSE)
-mt$is.m.admire <- ifelse(mt$transitivity == "transitive" & mt$is.admire, TRUE, FALSE)
-mt$is.m.sbjexp <- ifelse(mt$transitivity == "intransitive" | mt$is.admire, TRUE, FALSE)
+
 # Resort the df (again).
-mt <- mt[order(mt$transitivity, mt$lemma, mt$year),]
+mt <- mt[order(mt$follows_rule, mt$type, mt$time),]
 row.names(mt) <- NULL # reset the row indices so it stays in the right order
 ############################################################
 # Calculate whether the type is in the vocab of each learner
@@ -389,10 +448,10 @@ summary(mt)
 
 ```
 
-### Calculating values for N, M and the TP for each year.
+### Calculating values for N, M and the SP for each year.
 
-We now build a data table showing the results of a SP analysis for each
-rule, for each learner, for each year.
+We now build a data table showing the results of a SP analysis for each learner
+and for each point in time.
 
 ```{r tp table}
 # values for n
@@ -402,64 +461,40 @@ rule, for each learner, for each year.
 #mt$tp.learner.is.n <- ave(mt$cumFreq.window.rank.n, as.factor(mt$year), as.factor(mt$is.learner.is), FUN = max)
 # values for m
 #mt$tp.learner.ep.m.amuse <- ave(mt$lemma, as.factor(mt$year), as.factor(mt$is.learner.ep), as.factor(mt$is.m.amuse), FUN = length)
-years <-levels(as.factor(ct$year))
-tpt <- data.frame(matrix(ncol=5, nrow=0))
-# Generate TP stats. This is very slow and inefficient code, but it's not a simple
+times <-levels(as.factor(ct$time))
+tpt <- data.frame(matrix(ncol=4, nrow=0))
+# Generate SP stats. This is very slow and inefficient code, but it's not a simple
 # filtering operation.
 ############
 # EP learner
 qwe <- subset(mt, is.learner.ep)
-n <- tapply(qwe$cumFreq.rank.n, as.factor(qwe$year), FUN = max)
-m <- tapply(qwe[qwe$is.m.amuse,]$lemma, as.factor(qwe[qwe$is.m.amuse,]$year), FUN = \(x) length(levels(droplevels(x))))
-tpt <- rbind(tpt, cbind(years, "ep", "is.amuse", n, m))
-m <- tapply(qwe[qwe$is.m.admire,]$lemma, as.factor(qwe[qwe$is.m.admire,]$year), FUN = \(x) length(levels(droplevels(x))))
-tpt <- rbind(tpt, cbind(years, "ep", "is.admire", n, m))
-m <- tapply(qwe[qwe$is.m.sbjexp,]$lemma, as.factor(qwe[qwe$is.m.sbjexp,]$year), FUN = \(x) length(levels(droplevels(x))))
-tpt <- rbind(tpt, cbind(years, "ep", "is.sbjexp", n, m))
-m <- tapply(qwe[qwe$is.sbjexp,]$lemma, as.factor(qwe[qwe$is.sbjexp,]$year), FUN = \(x) length(levels(droplevels(x))))
-tpt <- rbind(tpt, cbind(years, "ep", "is.sbjexp.tr22", n, m))
+n <- tapply(qwe$cumFreq.rank.n, as.factor(qwe$time), FUN = max)
+m <- tapply(qwe[qwe$follows_rule == "1",]$type, as.factor(qwe[qwe$follows_rule == "1",]$time), FUN = \(x) length(levels(droplevels(x))))
+tpt <- rbind(tpt, cbind(times, "ep", n, m))
 ##############
 # ES learner
 qwe <- subset(mt, is.learner.es)
-n <- tapply(qwe$cumFreq.window.rank.n, as.factor(qwe$year), FUN = max)
-m <- tapply(qwe[qwe$is.m.amuse,]$lemma, as.factor(qwe[qwe$is.m.amuse,]$year), FUN = \(x) length(levels(droplevels(x))))
-tpt <- rbind(tpt, cbind(years, "es", "is.amuse", n, m))
-m <- tapply(qwe[qwe$is.m.admire,]$lemma, as.factor(qwe[qwe$is.m.admire,]$year), FUN = \(x) length(levels(droplevels(x))))
-tpt <- rbind(tpt, cbind(years, "es", "is.admire", n, m))
-m <- tapply(qwe[qwe$is.m.sbjexp,]$lemma, as.factor(qwe[qwe$is.m.sbjexp,]$year), FUN = \(x) length(levels(droplevels(x))))
-tpt <- rbind(tpt, cbind(years, "es", "is.sbjexp", n, m))
-m <- tapply(qwe[qwe$is.sbjexp,]$lemma, as.factor(qwe[qwe$is.sbjexp,]$year), FUN = \(x) length(levels(droplevels(x))))
-tpt <- rbind(tpt, cbind(years, "es", "is.sbjexp.tr22", n, m))
+n <- tapply(qwe$cumFreq.window.rank.n, as.factor(qwe$time), FUN = max)
+m <- tapply(qwe[qwe$follows_rule == "1",]$type, as.factor(qwe[qwe$follows_rule == "1",]$time), FUN = \(x) length(levels(droplevels(x))))
+tpt <- rbind(tpt, cbind(times, "es", n, m))
 ###############
 # IP learner
 qwe <- subset(mt, is.learner.ip)
-n <- tapply(qwe$cumFreq.rank.n, as.factor(qwe$year), FUN = max)
-m <- tapply(qwe[qwe$is.m.amuse,]$lemma, as.factor(qwe[qwe$is.m.amuse,]$year), FUN = \(x) length(levels(droplevels(x))))
-tpt <- rbind(tpt, cbind(years, "ip", "is.amuse", n, m))
-m <- tapply(qwe[qwe$is.m.admire,]$lemma, as.factor(qwe[qwe$is.m.admire,]$year), FUN = \(x) length(levels(droplevels(x))))
-tpt <- rbind(tpt, cbind(years, "ip", "is.admire", n, m))
-m <- tapply(qwe[qwe$is.m.sbjexp,]$lemma, as.factor(qwe[qwe$is.m.sbjexp,]$year), FUN = \(x) length(levels(droplevels(x))))
-tpt <- rbind(tpt, cbind(years, "ip", "is.sbjexp", n, m))
-m <- tapply(qwe[qwe$is.sbjexp,]$lemma, as.factor(qwe[qwe$is.sbjexp,]$year), FUN = \(x) length(levels(droplevels(x))))
-tpt <- rbind(tpt, cbind(years, "ip", "is.sbjexp.tr22", n, m))
+n <- tapply(qwe$cumFreq.rank.n, as.factor(qwe$time), FUN = max)
+m <- tapply(qwe[qwe$follows_rule == "1",]$type, as.factor(qwe[qwe$follows_rule == "1",]$time), FUN = \(x) length(levels(droplevels(x))))
+tpt <- rbind(tpt, cbind(times, "ip", n, m))
 ###############
 # IS learner
 qwe <- subset(mt, is.learner.is)
-n <- tapply(qwe$cumFreq.window.rank.n, as.factor(qwe$year), FUN = max)
-m <- tapply(qwe[qwe$is.m.amuse,]$lemma, as.factor(qwe[qwe$is.m.amuse,]$year), FUN = \(x) length(levels(droplevels(x))))
-tpt <- rbind(tpt, cbind(years, "is", "is.amuse", n, m))
-m <- tapply(qwe[qwe$is.m.admire,]$lemma, as.factor(qwe[qwe$is.m.admire,]$year), FUN = \(x) length(levels(droplevels(x))))
-tpt <- rbind(tpt, cbind(years, "is", "is.admire", n, m))
-m <- tapply(qwe[qwe$is.m.sbjexp,]$lemma, as.factor(qwe[qwe$is.m.sbjexp,]$year), FUN = \(x) length(levels(droplevels(x))))
-tpt <- rbind(tpt, cbind(years, "is", "is.sbjexp", n, m))
-m <- tapply(qwe[qwe$is.sbjexp,]$lemma, as.factor(qwe[qwe$is.sbjexp,]$year), FUN = \(x) length(levels(droplevels(x))))
-tpt <- rbind(tpt, cbind(years, "is", "is.sbjexp.tr22", n, m))
+n <- tapply(qwe$cumFreq.window.rank.n, as.factor(qwe$time), FUN = max)
+m <- tapply(qwe[qwe$follows_rule == "1",]$type, as.factor(qwe[qwe$follows_rule == "1",]$time), FUN = \(x) length(levels(droplevels(x))))
+tpt <- rbind(tpt, cbind(times, "is", n, m))
 ###############
 # SP calcs
-colnames(tpt) <- c("year", "learner", "rule", "n", "m")
+colnames(tpt) <- c("time", "learner", "n", "m")
 tpt$n <- as.numeric(tpt$n)
 tpt$m <- as.numeric(tpt$m)
-tpt$year <- as.numeric(tpt$year)
+tpt$time <- as.numeric(tpt$time)
 tpt$theta.n <- tpt$n / log(tpt$n)
 tpt$n.minus.m <- tpt$n - tpt$m
 tpt$sufficient <- ifelse(tpt$n.minus.m < tpt$theta.n, TRUE, FALSE)
@@ -480,19 +515,19 @@ library(data.table)
 # Bash the data into the right format to graph it (tip: all type values need
 # to be in a single column.)
 # Theta N needs to be both in the Stat column and a separate value
-n <- tpt[,c("year", "learner", "rule", "theta.n", "n")]
+n <- tpt[,c("time", "learner", "theta.n", "n")]
 n$stat <-"N"
-m <- tpt[,c("year", "learner", "rule", "theta.n", "m")]
+m <- tpt[,c("time", "learner", "theta.n", "m")]
 m$stat <- "M"
-n.minus.m <- tpt[,c("year", "learner", "rule", "theta.n", "n.minus.m")]
+n.minus.m <- tpt[,c("time", "learner", "theta.n", "n.minus.m")]
 n.minus.m$stat <- "N minus M"
-theta.n <- tpt[,c("year", "learner", "rule", "theta.n", "theta.n")]
+theta.n <- tpt[,c("time", "learner", "theta.n", "theta.n")]
 theta.n$stat <- "Theta N"
 # Now we need to RENAME the column because rbind requires them all to be
 # named
 l <- lapply(
   list(n, m, n.minus.m, theta.n), # for each item in the list
-  \(x) setnames(x, c("Year", "Learner", "Rule", "theta.n", "Types", "Stat")) #use setnames
+  \(x) setnames(x, c("Time", "Learner", "theta.n", "Types", "Stat")) #use setnames
 )
 tpt.plot <- as.data.frame(unclass(do.call(rbind, l)), stringsAsFactors=TRUE) # rbind the dfs together
 summary(tpt.plot)
