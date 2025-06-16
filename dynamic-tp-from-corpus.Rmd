@@ -550,7 +550,7 @@ colnames(tpt) <- c("time", "learner", "n", "m")
 tpt$n <- as.numeric(tpt$n)
 tpt$m <- as.numeric(tpt$m)
 tpt$time <- as.numeric(tpt$time)
-tpt$theta.n <- tpt$n / log(tpt$n)
+tpt$theta.n <- ceiling(tpt$n / log(tpt$n))
 tpt$n.minus.m <- tpt$n - tpt$m
 tpt$sufficient <- ifelse(tpt$n.minus.m < tpt$theta.n, TRUE, FALSE)
 tpt$sufficient.0 <- tpt$n.minus.m - tpt$theta.n
