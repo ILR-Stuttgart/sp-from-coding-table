@@ -495,8 +495,8 @@ row.names(mt) <- NULL # reset the row indices so it stays in the right order
 ###########################################################
 mt$is.learner.ep <- ifelse(mt$cumFreq > 0, TRUE, FALSE) # experienced, panchronic
 mt$is.learner.es <- ifelse(mt$cumFreq.window > 0, TRUE, FALSE) # experienced, time-limited
-mt$is.learner.ip <- ifelse(mt$cumFreq.rank <= ntrim.inclass & mt$cumFreq > 0, TRUE, FALSE) # inexperienced, panchronic
-mt$is.learner.is <- ifelse(mt$cumFreq.window.rank <= ntrim.inclass & mt$cumFreq.window > 0, TRUE, FALSE) # inexperienced, time-limited
+mt$is.learner.ip <- ifelse(mt$cumFreq.rank.n <= ntrim.inclass & mt$cumFreq > 0, TRUE, FALSE) # inexperienced, panchronic
+mt$is.learner.is <- ifelse(mt$cumFreq.window.rank.n <= ntrim.inclass & mt$cumFreq.window > 0, TRUE, FALSE) # inexperienced, time-limited
 #########################################################
 print("Summary of data")
 summary(mt)
@@ -628,7 +628,7 @@ plot_grid(
   ep, ip,
   ncol = 2, # two columns
   nrow = 1,
-  labels = c("Full lexicon", paste("Top ", as.character(NTRIM), " types")) # Plot titles
+  labels = c("Full lexicon", paste(as.character(NTRIM), " types, ", as.character(ntrim.inclass), " in class")) # Plot titles
 )
 ```
 
@@ -669,7 +669,7 @@ plot_grid(
   es, is,
   ncol = 2, # two columns
   nrow = 1,
-  labels = c("Full lexicon", paste("Top ", as.character(NTRIM), " types")) # Plot titles
+  labels = c("Full lexicon", paste(as.character(NTRIM), " types, ", as.character(ntrim.inclass), " in class")) # Plot titles
 )
 ```
 
