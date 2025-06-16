@@ -1,4 +1,7 @@
 ---
+title: Application of the Sufficiency Principle to historical corpus data: Four types of learner
+date: June 2025
+author: Thomas Rainsford
 ---
 
 ```{r setup, include=FALSE}
@@ -74,15 +77,34 @@ This block of R code is used to provide global variables to the script.
 **You should update these options.**
 
 + `CODING_TABLE`: Path to the file containing the data frame.
-+ `WINDOW`: The maximum number of occurrences analysed by "synchronic" learners.
-+ `NTRIM`: The number of verb lemmas known by "inexperienced" learners.
++ `WINDOW`: The maximum amount of corpus data analysed by "synchronic" learners.
++ `NTRIM`: The number of in_class items known by "inexperienced" learners.
++ `CORPUS_SIZE_BY_TIME` (optional): Path to a file containing a table giving
+the total size of the corpus for each point in time (see [below](#cumulative-frequency-of-datapoints-by-time))
 
 ```{r globals}
 # GLOBALS
 CODING_TABLE <- path.expand("~/Google Drive Shared/digs2025-lability-project/combined-coding-table-v17-anim-spc-cos.xlsx")
-WINDOW <- 100000 # number of clauses to allow in the "learning window" for the time limited learner
-NTRIM <- 23 # how many verbs the inexperienced learner knows
+WINDOW <- 100000 # amount of data to allow in the "learning window" for the time limited learner
+NTRIM <- 1000 # how many types the inexperienced learner knows
+CORPUS_SIZE_BY_TIME <- ""
 ```
+
+**IMPORTANT** The algorithm works best when the data table is based on a
+full corpus, containing both relevant (`in_class==1`) and irrelevant (`in_class==0`)
+data points. While items that don't fall into the class are irrelevant for the
+Sufficiency Principle calculation, they are relevant for:
+
++ `WINDOW`, which limits the total amount of corpus data to which the inexperienced
+learner has access, and
++ `NTRIM`, which refers to the total number of relevant and irrelevant types
+that the learner knows.
+
+If your data set only contains relevant data points, consider:
+
++ adjusting `WINDOW` and/or making a separate frequency table giving the size of
+the full corpus at each point in time (see [below](#cumulative-frequency-of-datapoints-by-time)
++ adjusting `NTRIM` to count only the number of relevant items.
 
 ## Global functions
 
@@ -120,7 +142,9 @@ make_follows_rule <- function(df) {
 
 ### User-defined
 
-```{r user-functions}
+You can overwrite the default `make_X` functions by redefining them here.
+
+```{r user-functions, include=FALSE}
 ##########################
 # FUNCTIONS FOR DIGS PAPER
 ##########################
@@ -253,15 +277,84 @@ ct <- ct[
 
 ```
 
-### Calculating cumulative frequency of data for each point in time
+### Cumulative frequency of datapoints by time
 
-How much data is there cumulatively for each point in time?
+The following code block derives a second data frame giving the cumulative frequency
+of the datapoints for each given point in time:
++ `time`: each given time point
++ `clause.Freq`: the number of datapoints at this point in time.
+
+**IMPORTANT** The cumulative frequency table is used in conjunction with the
+`WINDOW` variable to limit the amount of data available to the synchronic
+learner. The default implementation assumes that the input data table contains
+the full corpus and not just those datapoints relevant to the Sufficiency
+Principle calculation, i.e. the table doesn't just contain `in_class == 1`
+datapoints. If this isn't the case with your data, there are two options:
+
+1. Create a frequency table listing the  size of the corpus at each point in
+time and give the path to this file in `CORPUS_SIZE_BY_TIME`
+above. Any standard measure of corpus size can be used (tokens, lines, clauses).
+2. Use the automated cumulative frequency calculation but remember that the 
+synchronic learner will learn based on a fixed number of relevant datapoints
+rather than on a fixed amount of raw input data.
+
+In both cases, the `WINDOW` variable should be set accordingly.
 
 ```{r year cumul}
-yt <- as.data.frame(table(ct$time)) # Create table of frequencies by year
-colnames(yt) <- c("time", "clause.Freq")
+if (CORPUS_SIZE_BY_TIME == "") { # Calculate from dataset
+  yt <- as.data.frame(table(ct$time)) # Create table of frequencies by year
+  colnames(yt) <- c("time", "clause.Freq")
+} else { # Load table
+  if (file_ext(CORPUS_SIZE_BY_TIME) %in% c("xls", "xlsx")) {
+    yt <- read_excel(
+      path=CORPUS_SIZE_BY_TIME
+    )
+  } else {
+    yt <- read.delim(
+      file=CORPUS_SIZE_BY_TIME,
+      quote="",
+      stringsAsFactors=TRUE,
+      header=TRUE,
+      encoding="utf-8")
+  }
+}
+
+# Calculate cumulative frequency
 yt$clause.cumFreq <- cumsum(yt$clause.Freq)
+print("Summary of frequency table:")
+summary(yt)
 ```
+
+### Estimate number of in_class items known by the inexperienced learner
+
+For computational efficiency, the main table with the TP calculation will only
+contain relevant data points. However, the value of `NTRIM` refers to the total
+number of data points. This section of code establishes a ranked frequency list
+of all types in the full corpus and estimates how many relevant items are 
+contained in the top `NTRIM` types.
+
+```{r ntrim}
+rt <- as.data.frame(
+  list(
+    unique(ct$type), # Type
+    tapply( # Type frequency
+      X=ct$time, # Take a vector
+      INDEX=ct$type, # Index by type
+      FUN=length # Get its length (i.e. how many of this type)
+    ),
+    as.factor(levels(ct$in_class)[tapply( # in_class
+      X=ct$in_class, # Take in_class
+      INDEX=ct$type, # Index by type
+      FUN=unique # Get only value
+    )]
+  )),
+  col.names=c("type", "Freq", "in_class")
+)
+rt <- cbind(rt, "rank"=rank(rt$Freq * -1, ties.method = "random"))
+x <- rt[rt$rank <= NTRIM & rt$in_class == 1,]$type
+ntrim.inclass <- length(rt[rt$rank <= NTRIM & rt$in_class == 1,]$type)
+```
+
 
 ### Calculating attested structures for each verb by year (*N* and *M*)
 
@@ -283,14 +376,14 @@ year, where 1 is the most frequent.
 occur in the corpus up to and including this year 
 * `cumFreq.window`:
 cumulative frequency of the type-structure pair up to and including
-this time point, but only considering the previous `WINDOW` clauses in the
+this time point, but only considering the previous `WINDOW` amount of data in the
 corpus. 
 * `cumFreq.window.rank`: ranking of the relative frequency of
 type-structure pairs up to and including this point in time, but only
-considering the previous `WINDOW` clauses in the corpus where 1 is the
+considering the previous `WINDOW` amount of data in the corpus where 1 is the
 most frequent. 
 * `window.start.year`: since the window is based on the
-previous `WINDOW` clauses, this records the earliest time point of the in
+previous `WINDOW` amount of data, this records the earliest time point of the in
 the window.
 
 A non-trivial problem is that for trimming the lexicon, we need to know
@@ -321,7 +414,7 @@ not rule following and *dreden* + rule following would be 4, since learning the
 *dreden* rule-following type-structure pair doesn't involve learning a
 new type. 
 * `cumFreq.window.rank.n`: as above, but only considering
-data from the last `WINDOW` clauses in the corpus.
+data from the last `WINDOW` amount of data in the corpus.
 
 Using these values, we can now create four boolean variables to indicate
 which of our four learners would have been exposed to the
@@ -331,19 +424,16 @@ lemma-structure pair in the table at that particular date:
 whose input is everything attested in the corpus 
 * `is.learner.es`: the
 experienced, synchronic learner, i.e. the learner whose input is
-everything attested in the previous `WINDOW` clauses 
+everything attested in the previous `WINDOW` amount of data 
 * `is.learner.ip`:
 the inexperienced, panchronic leaner, i.e. the learner whose input is
 the most frequent type-structure pairs in the corpus up to this point
-up until a maxmimum of `NTRIM` verbs have been learned. 
+up until a maximum of `NTRIM` verbs have been learned. 
 * `is.learner.is`:
 the inexperienced, synchronic learner, as above, but calculated from the
-last `WINDOW` clauses rather than the full corpus.
+last `WINDOW` amount of data rather than the full corpus.
 
-**Important technical note: this code block can be very slow if there is
-a lot of data. We're talking hours.**
-
-```{r cross-tabulation m}
+```{r cross-tabulation-m}
 mt <- as.data.frame(xtabs(
     formula = ~ time + type + follows_rule, # cross tabulate the factors
     data = ct, # from the ct data frame
@@ -405,9 +495,10 @@ row.names(mt) <- NULL # reset the row indices so it stays in the right order
 ###########################################################
 mt$is.learner.ep <- ifelse(mt$cumFreq > 0, TRUE, FALSE) # experienced, panchronic
 mt$is.learner.es <- ifelse(mt$cumFreq.window > 0, TRUE, FALSE) # experienced, time-limited
-mt$is.learner.ip <- ifelse(mt$cumFreq.rank.n <= NTRIM & mt$cumFreq > 0, TRUE, FALSE) # inexperienced, panchronic
-mt$is.learner.is <- ifelse(mt$cumFreq.window.rank.n <= NTRIM & mt$cumFreq.window > 0, TRUE, FALSE) # inexperienced, time-limited
+mt$is.learner.ip <- ifelse(mt$cumFreq.rank <= ntrim.inclass & mt$cumFreq > 0, TRUE, FALSE) # inexperienced, panchronic
+mt$is.learner.is <- ifelse(mt$cumFreq.window.rank <= ntrim.inclass & mt$cumFreq.window > 0, TRUE, FALSE) # inexperienced, time-limited
 #########################################################
+print("Summary of data")
 summary(mt)
 
 ```
@@ -417,7 +508,7 @@ summary(mt)
 We now build a data table showing the results of a SP analysis for each learner
 and for each point in time.
 
-```{r tp table}
+```{r tp-table}
 # values for n
 #mt$tp.learner.ep.n <- ave(mt$cumFreq.rank.n, as.factor(mt$year), as.factor(mt$is.learner.ep), FUN = max)
 #mt$tp.learner.es.n <- ave(mt$cumFreq.window.rank.n, as.factor(mt$year), as.factor(mt$is.learner.es), FUN = max)
@@ -486,6 +577,7 @@ l <- lapply(
   \(x) setnames(x, c("Time", "Learner", "theta.n", "Types", "Stat")) #use setnames
 )
 tpt.plot <- as.data.frame(unclass(do.call(rbind, l)), stringsAsFactors=TRUE) # rbind the dfs together
+print("Summary of table to plot")
 summary(tpt.plot)
 ```
 
@@ -538,8 +630,6 @@ plot_grid(
   nrow = 1,
   labels = c("Full lexicon", paste("Top ", as.character(NTRIM), " types")) # Plot titles
 )
-
-
 ```
 
 ### Line plot for synchronic learners
@@ -547,7 +637,7 @@ plot_grid(
 Next, we're going to take a look at the two "synchronic" (ish) learners.
 Here's the R code for generating the plots.
 
-```{r diachronic learners}
+```{r diachronic-learners}
 
 # First, calculate the point from which it's sensible to start plotting, i.e.
 # the time from which we have more than WINDOW clauses
@@ -581,4 +671,36 @@ plot_grid(
   nrow = 1,
   labels = c("Full lexicon", paste("Top ", as.character(NTRIM), " types")) # Plot titles
 )
+```
+
+### Diagnostic plot: Window size by time
+
+The final plot is a diagnostic plot to show the time-span which `WINDOW` amount
+of data includes for each point in time. Corpora which aren't well balanced
+diachronically - which is most corpora - will have a much wider window for
+under-represented time periods. This should be borne in mind when interpreting
+the results.
+
+```{r timespan}
+ts <- as.data.frame(
+  x=list(
+    unique(mt$time), # Time values
+    tapply(
+      X=mt$window.start.year, # Take the start year
+      INDEX=mt$time, # Index by time
+      FUN=mean # Calculate the mean (values will always be identical)
+    )
+  ),
+  col.names=c("time", "window.start.year")
+)
+
+ggplot(
+  data = ts, # set the dataset
+  mapping = aes(time, window.start.year)
+) +
+geom_line() + 
+theme_minimal() + # Use the minimal theme
+ylim(min(mt$time), max(mt$time)) +
+xlim(min(mt$time), max(mt$time)) +
+labs(x="Time of latest data point", y="Time of earliest data point")
 ```
