@@ -1,5 +1,5 @@
 ---
-title: Application of the Sufficiency Principle to historical corpus data: Four types of learner
+title: Application of the Sufficiency Principle to historical corpus data. Four types of learner
 date: June 2025
 author: Thomas Rainsford
 ---
