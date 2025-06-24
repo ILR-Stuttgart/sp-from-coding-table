@@ -1,2 +1,706 @@
-# sp-from-coding-table
-R Script to perform Sufficiency Principle calculations from a coding table
+---
+title: Application of the Sufficiency Principle to historical corpus data: Four types of learner
+date: June 2025
+author: Thomas Rainsford
+---
+
+```{r setup, include=FALSE}
+library(ggplot2)
+library(cowplot)
+library(readxl)
+library(tools)
+library(data.table)
+knitr::opts_chunk$set(echo = TRUE)
+# FILE PATHS
+
+```
+
+# How to use this script
+
+## Objective
+
+This script is designed to operate on diachronic data and will perform
+Sufficiency Principle calculations. We model **four different types of learner**
+using an algorithm which is designed to analyse the historical data in a way
+which is more representative of the genuine linguistic experience of an
+historical learner.
+
+* the **panchronic experienced** learner is the *least* realistic of all our
+learners. This learner has access to all the corpus data and evaluates the rule
+with a single SP calculation.
+* the **panchronic inexperienced** learner has access to data from the full time-span
+of the corpus but only knows the most frequent types in the class (i.e., the
+lexicon is frequency trimmed). The number of types that the learner knows
+can be varied by changing the [Global variable](#global-variables) `NTRIM`.
+A single SP calculation is performed based only on the most frequent
+`NTRIM` types. **Important note**: the inexperienced learner is modelled such that
+s/he will not necessarily learn everything about the argument structure of these
+most common `NTRIM` types. For example, if a type is found 95% of the time in
+non rule-following contexts, the inexperienced learner will most likely not
+encounter the rare data points which show that it is actually rule-following.
+For more information on exactly how this is modelled, see [Implementation](#implementation).
+
+* the **synchronic experienced** learner has access to the full lexicon but 
+uses only the *most recent* data in the corpus. This is modelled by setting the
+number of clauses in the learner's memory with the [global variable](#global-variables)
+`WINDOW`. This learner is modelled using a series of SP calculations for each
+time point in the corpus, each of which only considers data from the previous
+`WINDOW` clauses. As a result, the synchronic learner's vocabulary changes
+over time. Note that the number of clauses specified by `WINDOW` refers to the
+full corpus, not just the number of rule-following items.
+* the **synchronic inexperienced** learner is restricted both by a maximum number
+of clauses (`WINDOW`) and by the maximum size of class (`NTRIM`). This learner
+is intended to be the most realistic of all the learners modelled.
+
+## Preparing the data
+
+The script requires a data frame in which each row is a data point, i.e.,
+if working on verbs, each occurrence of a verb should be on a different row.
+It must contain at least the following columns:
+
+* **type**: The name of the type represented in the row. For example, if you're
+working with verbs, this would be the verb lemma. Treated as a factor.
+* **time**: Some kind of continuous variable which gives the time associated
+with the data point, e.g. the year.
+* **in_class**: Is the datapoint a token of the relevant class of items? **1**
+  is true, **0** is false.
+* **follows_rule**: Does the datapoint follow the rule being evaluated? **1**
+  is true, **0** is false.
+  
+If the dataset doesn't contain these columns, you can create them by
+modifying the four `make_X` functions in the [Global Functions](#global-functions)
+section.
+
+## Global variables
+
+This block of R code is used to provide global variables to the script. 
+**You should update these options.**
+
++ `CODING_TABLE`: Path to the file containing the data frame.
++ `WINDOW`: The maximum amount of corpus data analysed by "synchronic" learners.
++ `NTRIM`: The number of in_class items known by "inexperienced" learners.
++ `CORPUS_SIZE_BY_TIME` (optional): Path to a file containing a table giving
+the total size of the corpus for each point in time (see [below](#cumulative-frequency-of-datapoints-by-time))
+
+```{r globals}
+# GLOBALS
+CODING_TABLE <- path.expand("~/Google Drive Shared/digs2025-lability-project/combined-coding-table-v17-anim-spc-cos.xlsx")
+WINDOW <- 100000 # amount of data to allow in the "learning window" for the time limited learner
+NTRIM <- 1000 # how many types the inexperienced learner knows
+CORPUS_SIZE_BY_TIME <- ""
+```
+
+**IMPORTANT** The algorithm works best when the data table is based on a
+full corpus, containing both relevant (`in_class==1`) and irrelevant (`in_class==0`)
+data points. While items that don't fall into the class are irrelevant for the
+Sufficiency Principle calculation, they are relevant for:
+
++ `WINDOW`, which limits the total amount of corpus data to which the inexperienced
+learner has access, and
++ `NTRIM`, which refers to the total number of relevant and irrelevant types
+that the learner knows.
+
+If your data set only contains relevant data points, consider:
+
++ adjusting `WINDOW` and/or making a separate frequency table giving the size of
+the full corpus at each point in time (see [below](#cumulative-frequency-of-datapoints-by-time)
++ adjusting `NTRIM` to count only the number of relevant items.
+
+## Global functions
+
+Here are the function definitions which will be applied to generate the
+**type**, **time** and **group** columns. They take the data frame as their
+sole argument and return a data frame with these columns added. The default
+functions do nothing.
+
+### Defaults
+
+```{r global-functions}
+
+########################
+# DEFAULT FUNCTIONS    #
+########################
+
+make_type <- function(df) {
+  df$type <- as.factor(as.character(df$type))
+  return(df)
+}
+
+make_time <- function(df) {
+  return(df)
+}
+
+make_in_class <- function(df) {
+  df$in_class <- as.factor(df$in_class)
+}
+
+make_follows_rule <- function(df) {
+  df$follows_rule <- as.factor(df$follows_rule)
+}
+
+```
+
+### User-defined
+
+You can overwrite the default `make_X` functions by redefining them here.
+
+```{r user-functions, include=FALSE}
+##########################
+# FUNCTIONS FOR DIGS PAPER
+##########################
+
+usr_get_textid <- function(chars) {
+  # If commas, split by comma
+  if (grepl(",", chars)) {
+    return(strsplit(
+      chars, ",")[[1]][1]
+    )
+  } else {
+    # else split by full stop
+    return(strsplit(
+      chars, ".")[[1]][1]
+    )
+  }
+}
+
+make_type <- function(df) {
+  df$type <- as.factor(as.character(df$lemma))
+  return(df)
+}
+
+make_time <- function(df) {
+  df$time <- df$year
+  return(df)
+}
+
+make_in_class <- function(df) {
+  df$in_class <- as.factor(as.character(
+    ifelse(as.character(df$cos) == "1", "1", "0")
+  ))
+  return(df)
+}
+
+make_follows_rule <- function(df) {
+  df$follows_rule <- as.factor(as.character(
+    ifelse(as.character(df$dobj) == "0", "0", "1")
+  ))
+  return(df)
+}
+
+```
+
+# Script
+
+## Presentation
+
+The data in the coding table is processed in chronological order 
+using the **time** and **group** columns as the input to a learning algorithm.
+The algorithm is trying to evaluate the evidence that a particular rule is
+productive, considering the tokens of every **type** within a class (the
+**in_class** column) to see whether or not they provide evidence for a
+productive rule (the **follows_rule** column).
+
+To model the experience of a language learner, let's imagine that the
+learning algorithm "reads through" the texts in the corpus one by one.
+For every occurrence of a item within the class in question,the learning
+algorithm receives two pieces of data. First, it receives information
+that the type exists. Second, it receives information as to whether it follows
+a particular rule or not. As it "reads through" the corpus, it
+acquires more and more data until it arrives at an analysis based on all
+the corpus data.
+
+However, there are a number of ways in which this *doesn't* model the
+experience of a language learner. First, corpus data may contain a large 
+number of different types, some of which are very rare and possibly
+restricted to written registers. While a proficient speaker may
+eventually acquire this many verbs, it's unclear whether many learners
+will have been exposed to so many types during the
+critical period. This is where "frequency trimming" comes in (Kodner
+2019): we assume that a better approximation of the input to a real
+language learner comes from ignore the rarer types, so we may want to
+restrict our learning algorithm to focusing on only the most frequent
+types. Second, historical data is spread out across a long time period, and it's
+unlikely that any learner would have had access to such a wide range of
+data chronologically. Consequently, as the learning algorithm
+progresses through the corpus, data from further back in time should drop out of
+the input.
+
+The analysis thus models different types of learner based on two
+independent parameters of variation:
+
+* on the **diachronic** axis, we model a single **panchronic** learner, who has
+access to data from every text, and a series of **synchronic** learners, who
+only have access to data from a fixed number of clauses, given in the global
+variable `WINDOW`.
+* on the **knowledge** axis, we model an **experienced** learner, who bases their
+analysis on every single type attested in the time period in question,
+and an **inexperienced** learner, whose analysis is based only on the most
+frequent types, given by the global variable `NTRIM`.
+
+## Implementation
+
+### Load dataset
+
+The code block below:
+
+1. loads the dataset.
+2. adds the type, group and time columns
+3. sorts the table by time and then by group
+
+```{r prepare}
+
+# Read df
+if (file_ext(CODING_TABLE) %in% c("xls", "xlsx")) {
+  ct <- read_excel(
+    path=CODING_TABLE
+  )
+} else {
+  ct <- read.delim(
+    file=CODING_TABLE,
+    quote="",
+    stringsAsFactors=TRUE,
+    header=TRUE,
+    encoding="utf-8")
+}
+
+# Run functions
+
+ct <- make_type(ct)
+ct <- make_time(ct)
+ct <- make_in_class(ct)
+ct <- make_follows_rule(ct)
+
+# Order df by time.
+ct <- ct[
+  order(ct$time),
+]
+
+```
+
+### Cumulative frequency of datapoints by time
+
+The following code block derives a second data frame giving the cumulative frequency
+of the datapoints for each given point in time:
++ `time`: each given time point
++ `clause.Freq`: the number of datapoints at this point in time.
+
+**IMPORTANT** The cumulative frequency table is used in conjunction with the
+`WINDOW` variable to limit the amount of data available to the synchronic
+learner. The default implementation assumes that the input data table contains
+the full corpus and not just those datapoints relevant to the Sufficiency
+Principle calculation, i.e. the table doesn't just contain `in_class == 1`
+datapoints. If this isn't the case with your data, there are two options:
+
+1. Create a frequency table listing the  size of the corpus at each point in
+time and give the path to this file in `CORPUS_SIZE_BY_TIME`
+above. Any standard measure of corpus size can be used (tokens, lines, clauses).
+2. Use the automated cumulative frequency calculation but remember that the 
+synchronic learner will learn based on a fixed number of relevant datapoints
+rather than on a fixed amount of raw input data.
+
+In both cases, the `WINDOW` variable should be set accordingly.
+
+```{r year cumul}
+if (CORPUS_SIZE_BY_TIME == "") { # Calculate from dataset
+  yt <- as.data.frame(table(ct$time)) # Create table of frequencies by year
+  colnames(yt) <- c("time", "clause.Freq")
+} else { # Load table
+  if (file_ext(CORPUS_SIZE_BY_TIME) %in% c("xls", "xlsx")) {
+    yt <- read_excel(
+      path=CORPUS_SIZE_BY_TIME
+    )
+  } else {
+    yt <- read.delim(
+      file=CORPUS_SIZE_BY_TIME,
+      quote="",
+      stringsAsFactors=TRUE,
+      header=TRUE,
+      encoding="utf-8")
+  }
+}
+
+# Calculate cumulative frequency
+yt$clause.cumFreq <- cumsum(yt$clause.Freq)
+print("Summary of frequency table:")
+summary(yt)
+```
+
+### Estimate number of in_class items known by the inexperienced learner
+
+For computational efficiency, the main table with the TP calculation will only
+contain relevant data points. However, the value of `NTRIM` refers to the total
+number of data points. This section of code establishes a ranked frequency list
+of all types in the full corpus and estimates how many relevant items are 
+contained in the top `NTRIM` types.
+
+```{r ntrim}
+rt <- as.data.frame(
+  list(
+    unique(ct$type), # Type
+    tapply( # Type frequency
+      X=ct$time, # Take a vector
+      INDEX=ct$type, # Index by type
+      FUN=length # Get its length (i.e. how many of this type)
+    ),
+    as.factor(levels(ct$in_class)[tapply( # in_class
+      X=ct$in_class, # Take in_class
+      INDEX=ct$type, # Index by type
+      FUN=unique # Get only value
+    )]
+  )),
+  col.names=c("type", "Freq", "in_class")
+)
+rt <- cbind(rt, "rank"=rank(rt$Freq * -1, ties.method = "random"))
+x <- rt[rt$rank <= NTRIM & rt$in_class == 1,]$type
+ntrim.inclass <- length(rt[rt$rank <= NTRIM & rt$in_class == 1,]$type)
+```
+
+
+### Calculating attested structures for each verb by year (*N* and *M*)
+
+We now need to trace the chronological development of the **in_class**
+and **follows_rule** items. This table forms the basis of the analysis. Each row
+codes a type-structure pair.
+
+The columns in the data frame give the following information about
+**token** frequency: 
+
+* `Freq`: frequency of the type-structure pair *in
+this year only* 
+* `cumFreq`: cumulative frequency of the type-structure
+pair *up to and including this year* 
+* `cumFreq.rank`: ranking of the
+relative frequency of the type-structure pair up to and including this
+year, where 1 is the most frequent. 
+* `clause.cumFreq`: how many clauses
+occur in the corpus up to and including this year 
+* `cumFreq.window`:
+cumulative frequency of the type-structure pair up to and including
+this time point, but only considering the previous `WINDOW` amount of data in the
+corpus. 
+* `cumFreq.window.rank`: ranking of the relative frequency of
+type-structure pairs up to and including this point in time, but only
+considering the previous `WINDOW` amount of data in the corpus where 1 is the
+most frequent. 
+* `window.start.year`: since the window is based on the
+previous `WINDOW` amount of data, this records the earliest time point of the in
+the window.
+
+A non-trivial problem is that for trimming the lexicon, we need to know
+how many *types* the learner knows rather than how many type-structure
+pairs. To illustrate this problem and how we solve it, let's imagine
+that a very inexperienced learner has only learned the following five
+most frequent "types":
+
+1. *loven* + not rule following;
+2. *dreden* + not rule following;
+3. *admire* + not rule following;
+4. *plesen* + not rule following;
+5. *haten* + not rule following;
+6. *dreden* + rule following.
+
+Although the table rankings show that this
+learner has learned six structures, all of which are (potentially)
+relevant when trying to calculate the value of *M* for the SP, the
+learner in fact only knows five types. So the table needs to indicate,
+for each row, how many type. the learner has acquired by the time they
+learn the type-structure pair coded in the row. This is done by the following
+columns: 
+
+* `cumFreq.rank.n`: number of types that the learner has
+already encountered by the time they learn this particular
+type-structure pair. In the example above, the value for both *haten* +
+not rule following and *dreden* + rule following would be 4, since learning the
+*dreden* rule-following type-structure pair doesn't involve learning a
+new type. 
+* `cumFreq.window.rank.n`: as above, but only considering
+data from the last `WINDOW` amount of data in the corpus.
+
+Using these values, we can now create four boolean variables to indicate
+which of our four learners would have been exposed to the
+lemma-structure pair in the table at that particular date: 
+
+* `is.learner.ep`: the experienced, panchronic learner, i.e. the learner
+whose input is everything attested in the corpus 
+* `is.learner.es`: the
+experienced, synchronic learner, i.e. the learner whose input is
+everything attested in the previous `WINDOW` amount of data 
+* `is.learner.ip`:
+the inexperienced, panchronic leaner, i.e. the learner whose input is
+the most frequent type-structure pairs in the corpus up to this point
+up until a maximum of `NTRIM` verbs have been learned. 
+* `is.learner.is`:
+the inexperienced, synchronic learner, as above, but calculated from the
+last `WINDOW` amount of data rather than the full corpus.
+
+```{r cross-tabulation-m}
+mt <- as.data.frame(xtabs(
+    formula = ~ time + type + follows_rule, # cross tabulate the factors
+    data = ct, # from the ct data frame
+    subset = ct$in_class == "1", # subsetting for in_class types only
+    drop.unused.levels = TRUE # and dropping levels
+))
+# From the year table, add the cumulative frequency of clauses up to this year
+mt <- merge(mt, yt[,c("time", "clause.cumFreq")], by="time", sort=FALSE)
+# Resort the df, making it readable.
+mt <- mt[order(mt$follows_rule, mt$type, mt$time),]
+row.names(mt) <- NULL # reset the row indices so it stays in the right order
+# The cross-tabulation sets the year as a factor, then says it's an integer.
+# Let's eliminate this problematic behaviour
+mt$time <- as.numeric(as.character(mt$time))
+# Calculate cumulative frequencies and cumsum.window 
+# Yes it is far too complicated to use an apply function here.
+x <- c() # set three empty return vectors
+y <- c() 
+z <- c()
+for (i in 1:nrow(mt)) { # loop over row indices
+  # first, sum the rows from mt with the same type and the same follows_rule
+  # dating from time or earlier
+  qwe <- mt[mt$type == mt[i,]$type & mt$follows_rule == mt[i,]$follows_rule & mt$time <= mt[i,]$time,]
+  # Calculate cumfreq, add it to x
+  x <- c(x, sum(qwe$Freq))
+  # Further subset qwe to exclude clause.cumFreqs that are WINDOW less than the current one.
+  asd <- qwe[qwe$clause.cumFreq > mt[i,]$clause.cumFreq - WINDOW,]
+  y <- c(y, sum(asd$Freq))
+  # Let's also record the year the window starts (for future reference)
+  z <- c(z, min(asd$time))
+ }
+mt$cumFreq <- x # Set cumFreq from x
+mt$cumFreq.window <- y # Set cumFreq.window from y
+mt$window.start.year <- z # Set startyear from z
+############################################
+# Ranking the cumfreq values
+mt$cumFreq.rank <- ave(mt$cumFreq, mt$time, FUN = \(x) rank(x * -1, ties.method = "random"))
+mt$cumFreq.window.rank <- ave(mt$cumFreq.window, mt$time, FUN = \(x) rank(x * -1, ties.method = "random"))
+########################################################
+# Calculating N for the window.rank scores for each year
+# For each row, we subset the lemma vector by year and cumFreq.window.rank.
+# We then calculate how many levels the new factor has.
+mt$cumFreq.window.rank.n <- 0
+mt$cumFreq.rank.n <- 0
+for (i in 1:nrow(mt)) { # iterate over the data frame
+  # subset lemmas by year and having a lower or equal cumFreq.(window).rank
+  x <- mt[mt$time == mt[i,]$time & mt$cumFreq.window.rank <= mt[i,]$cumFreq.window.rank,]$type
+  y <- mt[mt$time == mt[i,]$time & mt$cumFreq.rank <= mt[i,]$cumFreq.rank,]$type
+  # calculate number of lemmas known (levels of the new vector)
+  mt[i,]$cumFreq.window.rank.n <- length(levels(droplevels(x)))
+  mt[i,]$cumFreq.rank.n <- length(levels(droplevels(y)))
+}
+
+# Resort the df (again).
+mt <- mt[order(mt$follows_rule, mt$type, mt$time),]
+row.names(mt) <- NULL # reset the row indices so it stays in the right order
+############################################################
+# Calculate whether the type is in the vocab of each learner
+###########################################################
+mt$is.learner.ep <- ifelse(mt$cumFreq > 0, TRUE, FALSE) # experienced, panchronic
+mt$is.learner.es <- ifelse(mt$cumFreq.window > 0, TRUE, FALSE) # experienced, time-limited
+mt$is.learner.ip <- ifelse(mt$cumFreq.rank.n <= ntrim.inclass & mt$cumFreq > 0, TRUE, FALSE) # inexperienced, panchronic
+mt$is.learner.is <- ifelse(mt$cumFreq.window.rank.n <= ntrim.inclass & mt$cumFreq.window > 0, TRUE, FALSE) # inexperienced, time-limited
+#########################################################
+print("Summary of data")
+summary(mt)
+
+```
+
+### Calculating values for N, M and the SP for each year.
+
+We now build a data table showing the results of a SP analysis for each learner
+and for each point in time.
+
+```{r tp-table}
+# values for n
+#mt$tp.learner.ep.n <- ave(mt$cumFreq.rank.n, as.factor(mt$year), as.factor(mt$is.learner.ep), FUN = max)
+#mt$tp.learner.es.n <- ave(mt$cumFreq.window.rank.n, as.factor(mt$year), as.factor(mt$is.learner.es), FUN = max)
+#mt$tp.learner.ip.n <- ave(mt$cumFreq.rank.n, as.factor(mt$year), as.factor(mt$is.learner.ip), FUN = max) # problem is rank 30 is joint
+#mt$tp.learner.is.n <- ave(mt$cumFreq.window.rank.n, as.factor(mt$year), as.factor(mt$is.learner.is), FUN = max)
+# values for m
+#mt$tp.learner.ep.m.amuse <- ave(mt$lemma, as.factor(mt$year), as.factor(mt$is.learner.ep), as.factor(mt$is.m.amuse), FUN = length)
+times <-levels(as.factor(mt$time))
+tpt <- data.frame(matrix(ncol=4, nrow=0))
+# Generate SP stats. This is very slow and inefficient code, but it's not a simple
+# filtering operation.
+############
+# EP learner
+qwe <- subset(mt, is.learner.ep)
+n <- tapply(qwe$cumFreq.rank.n, as.factor(qwe$time), FUN = max)
+m <- tapply(qwe[qwe$follows_rule == "1",]$type, as.factor(qwe[qwe$follows_rule == "1",]$time), FUN = \(x) length(levels(droplevels(x))))
+tpt <- rbind(tpt, cbind(times, "ep", n, m))
+##############
+# ES learner
+qwe <- subset(mt, is.learner.es)
+n <- tapply(qwe$cumFreq.window.rank.n, as.factor(qwe$time), FUN = max)
+m <- tapply(qwe[qwe$follows_rule == "1",]$type, as.factor(qwe[qwe$follows_rule == "1",]$time), FUN = \(x) length(levels(droplevels(x))))
+tpt <- rbind(tpt, cbind(times, "es", n, m))
+###############
+# IP learner
+qwe <- subset(mt, is.learner.ip)
+n <- tapply(qwe$cumFreq.rank.n, as.factor(qwe$time), FUN = max)
+m <- tapply(qwe[qwe$follows_rule == "1",]$type, as.factor(qwe[qwe$follows_rule == "1",]$time), FUN = \(x) length(levels(droplevels(x))))
+tpt <- rbind(tpt, cbind(times, "ip", n, m))
+###############
+# IS learner
+qwe <- subset(mt, is.learner.is)
+n <- tapply(qwe$cumFreq.window.rank.n, as.factor(qwe$time), FUN = max)
+m <- tapply(qwe[qwe$follows_rule == "1",]$type, as.factor(qwe[qwe$follows_rule == "1",]$time), FUN = \(x) length(levels(droplevels(x))))
+tpt <- rbind(tpt, cbind(times, "is", n, m))
+###############
+# SP calcs
+colnames(tpt) <- c("time", "learner", "n", "m")
+tpt$n <- as.numeric(tpt$n)
+tpt$m <- as.numeric(tpt$m)
+tpt$time <- as.numeric(tpt$time)
+tpt$theta.n <- ceiling(tpt$n / log(tpt$n))
+tpt$n.minus.m <- tpt$n - tpt$m
+tpt$sufficient <- ifelse(tpt$n.minus.m < tpt$theta.n, TRUE, FALSE)
+tpt$sufficient.0 <- tpt$n.minus.m - tpt$theta.n
+
+##############################
+# Create tpt.plot for plotting
+##############################
+# Panchronic learners
+# Bash the data into the right format to graph it (tip: all type values need
+# to be in a single column.)
+# Theta N needs to be both in the Stat column and a separate value
+n <- tpt[,c("time", "learner", "theta.n", "n")]
+n$stat <-"N"
+m <- tpt[,c("time", "learner", "theta.n", "m")]
+m$stat <- "M"
+n.minus.m <- tpt[,c("time", "learner", "theta.n", "n.minus.m")]
+n.minus.m$stat <- "N minus M"
+theta.n <- tpt[,c("time", "learner", "theta.n", "theta.n")]
+theta.n$stat <- "Theta N"
+# Now we need to RENAME the column because rbind requires them all to be
+# named
+l <- lapply(
+  list(n, m, n.minus.m, theta.n), # for each item in the list
+  \(x) setnames(x, c("Time", "Learner", "theta.n", "Types", "Stat")) #use setnames
+)
+tpt.plot <- as.data.frame(unclass(do.call(rbind, l)), stringsAsFactors=TRUE) # rbind the dfs together
+print("Summary of table to plot")
+summary(tpt.plot)
+```
+
+## Plotting
+
+### Histogram plot for panchronic learners
+
+First, we'll consider how the two panchronic learners got on with two
+histogram plots.
+
+```{r panchronic}
+##############################################################################
+# Define some functions to draw the plots.
+# N and M plot
+nmplot <- function(learner, time, df) {
+  # Subset the data
+  df <- droplevels(subset(df, Learner == learner & Time == time & Stat %in% c("M", "N minus M")))
+  # Turn time to a factor
+  df$Time <- as.factor(df$Time)
+  qwe <- ggplot(
+    data = df, # set the dataset
+    mapping = aes(Time, Types, fill = Stat) # Select x and y coordinates; tell it use the fill value to set colour
+  ) + 
+  geom_bar( # tell it to make a bar plot
+    position="stack", # tell it to stack the columns
+    stat="identity" # tell it to use the raw value
+  ) +
+  geom_point( # Add a point for the threshold value
+    data = df, # using theta_N data
+    mapping = aes(Time, theta.n), # to add a point for the threshold
+    size = 2, # change its size
+    show.legend = FALSE # no legend required
+  ) +
+  geom_text( # Add label
+    data = df, # using theta_N data
+    mapping = aes(Time, theta.n), # to add a label for the threshold
+    label = "Theta N", # Label
+    nudge_y = 7 # move it up a bit
+  ) +
+  theme_minimal() + # Use the minimal theme
+  labs(x="Time of latest data point", y="Number of types") 
+  return(qwe)
+}
+
+ep <- nmplot(learner="ep", time=max(tpt.plot$Time), df=tpt.plot) + ylim(NA, max(tpt$n))
+ip <- nmplot(learner="ip", time=max(tpt.plot$Time), df=tpt.plot) + ylim(NA, max(tpt$n))
+plot_grid(
+  ep, ip,
+  ncol = 2, # two columns
+  nrow = 1,
+  labels = c("Full lexicon", paste(as.character(NTRIM), " types, ", as.character(ntrim.inclass), " in class")) # Plot titles
+)
+```
+
+### Line plot for synchronic learners
+
+Next, we're going to take a look at the two "synchronic" (ish) learners.
+Here's the R code for generating the plots.
+
+```{r diachronic-learners}
+
+# First, calculate the point from which it's sensible to start plotting, i.e.
+# the time from which we have more than WINDOW clauses
+start.time <- min(mt[mt$clause.cumFreq > WINDOW,]$time)
+# Trim the data table
+tpt.trimmed <- subset(tpt.plot, Time >= start.time)
+
+nmplot.time <- function(learner, df) {
+  # Subset the data
+  df <- droplevels(subset(df, Learner == learner))
+  qwe <- ggplot(
+    data = df, # set the dataset
+    mapping = aes(Time, Types)
+  ) +
+  geom_line( # tell it to make a line graph
+    mapping = aes(color = Stat), # grouping and colouring by Stat
+    #show.legend = TRUE
+  ) + 
+  ylim(0, NA) + # Making sure the scale start from zero
+  theme_minimal() + # Use the minimal theme
+  labs(x="Time of latest data point", y="Number of types")
+  return(qwe)
+}
+
+es <- nmplot.time(learner="es", tpt.trimmed) + ylim(0, max(tpt$n))
+is <- nmplot.time(learner="is", tpt.trimmed) + ylim(0, max(tpt$n))
+
+plot_grid(
+  es, is,
+  ncol = 2, # two columns
+  nrow = 1,
+  labels = c("Full lexicon", paste(as.character(NTRIM), " types, ", as.character(ntrim.inclass), " in class")) # Plot titles
+)
+```
+
+### Diagnostic plot: Window size by time
+
+The final plot is a diagnostic plot to show the time-span which `WINDOW` amount
+of data includes for each point in time. Corpora which aren't well balanced
+diachronically - which is most corpora - will have a much wider window for
+under-represented time periods. This should be borne in mind when interpreting
+the results.
+
+```{r timespan}
+ts <- as.data.frame(
+  x=list(
+    unique(mt$time), # Time values
+    tapply(
+      X=mt$window.start.year, # Take the start year
+      INDEX=mt$time, # Index by time
+      FUN=mean # Calculate the mean (values will always be identical)
+    )
+  ),
+  col.names=c("time", "window.start.year")
+)
+
+ggplot(
+  data = ts, # set the dataset
+  mapping = aes(time, window.start.year)
+) +
+geom_line() + 
+theme_minimal() + # Use the minimal theme
+ylim(min(mt$time), max(mt$time)) +
+xlim(min(mt$time), max(mt$time)) +
+labs(x="Time of latest data point", y="Time of earliest data point")
+```
